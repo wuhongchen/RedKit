@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         小红书笔记内容&评论下载器
-// @namespace    https://xhsqun.com
+// @namespace    https://github.com/wuhongchen/RedKit
 // @version      1.2
 // @description  在小红书笔记详情页一键提取帖子内容、评论，导出 CSV 表格，或打包下载全部图片/视频素材。
-// @author       XHS Tool
+// @author       whc
 // @match        https://www.xiaohongshu.com/explore*
 // @match        https://www.xiaohongshu.com/search_result*
 // @icon         https://fe-video-qc.xhscdn.com/fe-platform/ed8fe781ce9e16c1bfac2cd962f0721edabe2e49.ico
