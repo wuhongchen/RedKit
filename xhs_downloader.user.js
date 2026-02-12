@@ -686,9 +686,13 @@
             try {
                 // 使用 GM_xmlhttpRequest 获取 ArrayBuffer
                 const buffer = await gmFetch(url);
-                zip.file(fileName, buffer);
-                downloaded++;
-                setStatus(`⏳ 下载中 ${downloaded}/${totalFiles}...`);
+                if (buffer && buffer.byteLength > 0) {
+                    zip.file(fileName, new Uint8Array(buffer)); // 关键修复：包装为 Uint8Array
+                    downloaded++;
+                    setStatus(`⏳ 下载中 ${downloaded}/${totalFiles}...`);
+                } else {
+                    throw new Error('Empty buffer');
+                }
             } catch (e) {
                 console.warn('[XHS-DL] 图片下载失败:', url, e);
                 setStatus(`⚠️ 图片 ${i + 1} 下载失败，跳过`);
@@ -703,11 +707,14 @@
             const fileName = `video_${i + 1}.${ext}`;
             try {
                 setStatus(`⏳ 下载视频 ${i + 1}/${totalVideos}（文件较大，请稍候）...`);
-                // 使用 GM_xmlhttpRequest 获取 ArrayBuffer
                 const buffer = await gmFetch(url);
-                zip.file(fileName, buffer);
-                downloaded++;
-                setStatus(`⏳ 下载中 ${downloaded}/${totalFiles}...`);
+                if (buffer && buffer.byteLength > 0) {
+                    zip.file(fileName, new Uint8Array(buffer)); // 关键修复：包装为 Uint8Array
+                    downloaded++;
+                    setStatus(`⏳ 下载中 ${downloaded}/${totalFiles}...`);
+                } else {
+                    throw new Error('Empty buffer');
+                }
             } catch (e) {
                 console.warn('[XHS-DL] 视频下载失败:', url, e);
                 setStatus(`⚠️ 视频 ${i + 1} 下载失败，跳过`);
@@ -727,9 +734,12 @@
         const zipName = `${media.noteId}_${sanitize(media.title)}_${dateStr}.zip`;
 
         try {
-            const zipBlob = await zip.generateAsync({ type: 'blob' }, (meta) => {
+            const zipBlob = await zip.generateAsync({
+                type: 'blob',
+                compression: 'STORE' // 关键修复：仅存储不压缩，提高稳定性和速度
+            }, (meta) => {
                 const percent = Math.round(meta.percent);
-                if (percent % 10 === 0) console.log(`[XHS-DL] 压缩进度: ${percent}%`);
+                if (percent % 20 === 0) console.log(`[XHS-DL] 压缩进度: ${percent}%`);
                 setStatus(`⏳ 压缩中 ${percent}%...`);
             });
 
