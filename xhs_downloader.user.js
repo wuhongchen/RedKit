@@ -720,6 +720,7 @@
         }
 
         // 生成 ZIP 并触发下载
+        console.log('[XHS-DL] 开始生成 ZIP blob...');
         setStatus('⏳ 正在压缩打包...');
         const today = new Date();
         const dateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
@@ -727,8 +728,12 @@
 
         try {
             const zipBlob = await zip.generateAsync({ type: 'blob' }, (meta) => {
-                setStatus(`⏳ 压缩中 ${Math.round(meta.percent)}%...`);
+                const percent = Math.round(meta.percent);
+                if (percent % 10 === 0) console.log(`[XHS-DL] 压缩进度: ${percent}%`);
+                setStatus(`⏳ 压缩中 ${percent}%...`);
             });
+
+            console.log('[XHS-DL] ZIP生成成功, 大小:', zipBlob.size);
 
             const blobUrl = URL.createObjectURL(zipBlob);
             const a = document.createElement('a');
@@ -736,14 +741,21 @@
             a.download = zipName;
             a.style.display = 'none';
             document.body.appendChild(a);
+            console.log('[XHS-DL] 触发模拟点击下载:', zipName);
             a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 10000); // 延时释放
+
+            // 延时清理
+            setTimeout(() => {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(blobUrl);
+                console.log('[XHS-DL] 清理临时资源');
+            }, 30000);
 
             setStatus(`✅ 打包完成！${downloaded} 个文件 → ${zipName}`);
         } catch (e) {
-            setStatus('❌ 压缩打包失败，请查看控制台');
-            console.error('[XHS-DL] ZIP生成失败:', e);
+            console.error('[XHS-DL] 压缩打包关键错误:', e);
+            setStatus(`❌ 打包失败: ${e.message || '未知错误'}`);
+            alert('打包过程出错，详细错误请看控制台：\n' + e.stack);
         }
     }
 
