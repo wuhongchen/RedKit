@@ -455,301 +455,299 @@
         setStatus(`✅ 提取完成！本次新增 ${count} 条，总计 ${state.searchResults.length} 条笔记`);
     }
 
-}
-
     // ========== CSV 工具函数 ==========
     function csvEscape(val) {
-    if (val == null) return '';
-    const str = String(val).replace(/\r?\n/g, ' '); // 换行替换为空格
-    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-        return '"' + str.replace(/"/g, '""') + '"';
-    }
-    return str;
-}
-
-function buildCSVRow(fields) {
-    return fields.map(csvEscape).join(',');
-}
-
-// ========== 导出 CSV 表格 ==========
-function exportCSV() {
-    if (!state.noteData && state.comments.length === 0 && state.searchResults.length === 0) {
-        setStatus('❌ 没有数据可导出，请先提取笔记内容、评论或搜索结果');
-        return;
-    }
-
-    const rows = [];
-    const note = state.noteData || {};
-
-    if (state.noteData || state.comments.length > 0) {
-        // ---- 笔记信息区 ----
-        rows.push(buildCSVRow(['=== 笔记详情信息 ===', '', '', '', '']));
-        rows.push(buildCSVRow(['笔记ID', note.noteId || '']));
-        rows.push(buildCSVRow(['标题', note.title || '']));
-        rows.push(buildCSVRow(['作者', note.author || '']));
-        rows.push(buildCSVRow(['发布日期', note.publishDate || '']));
-        rows.push(buildCSVRow(['IP属地', note.ipLocation || '']));
-        rows.push(buildCSVRow(['点赞', note.likes || '', '收藏', note.collects || '', '评论数', note.commentsCount || '']));
-        rows.push(buildCSVRow(['正文', note.desc || '']));
-        rows.push(buildCSVRow(['标签', (note.tags || []).join(' ')]));
-        rows.push(buildCSVRow(['图片链接', (note.images || []).join(' | ')]));
-        if (note.video) rows.push(buildCSVRow(['视频链接', note.video]));
-        rows.push(buildCSVRow(['原文链接', note.url || '']));
-        rows.push(buildCSVRow(['提取时间', note.extractedAt || new Date().toISOString()]));
-        rows.push(''); // 空行分隔
-    }
-
-    // ---- 评论明细区 ----
-    rows.push(buildCSVRow(['=== 评论明细 ===', '', '', '', '']));
-    rows.push(buildCSVRow(['序号', '用户', '评论内容', '评论时间', '点赞数', '类型']));
-
-    let idx = 1;
-    state.comments.forEach((c) => {
-        rows.push(buildCSVRow([idx++, c.user, c.content, c.date, c.likes || '', '主评论']));
-        // 子评论/回复
-        if (c.replies && c.replies.length > 0) {
-            c.replies.forEach((r) => {
-                rows.push(buildCSVRow([idx++, r.user, r.content, r.date, '', '↳ 回复']));
-            });
+        if (val == null) return '';
+        const str = String(val).replace(/\r?\n/g, ' '); // 换行替换为空格
+        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+            return '"' + str.replace(/"/g, '""') + '"';
         }
-    });
-
-    // 添加统计行
-    rows.push('');
-    rows.push(buildCSVRow(['合计评论数', state.comments.length]));
-
-    // ---- 搜索结果区 ----
-    if (state.searchResults.length > 0) {
-        rows.push('');
-        rows.push(buildCSVRow(['=== 搜索结果列表 ===', '', '', '', '', '']));
-        rows.push(buildCSVRow(['序号', '笔记ID', '标题', '作者', '点赞数', '链接']));
-        state.searchResults.forEach((item, i) => {
-            rows.push(buildCSVRow([i + 1, item.id, item.title, item.author, item.likes, item.url]));
-        });
+        return str;
     }
 
-    rows.push('');
-    rows.push(buildCSVRow(['导出时间', new Date().toISOString()]));
-
-    const fileName = note.noteId
-        ? `xhs_${note.noteId}_${(note.title || '').substring(0, 20).replace(/[\\/:*?"<>|]/g, '_')}.csv`
-        : `xhs_search_export_${Date.now()}.csv`;
-
-    // BOM + CSV 内容（确保 Excel 正确识别 UTF-8）
-    const BOM = '\uFEFF';
-    const csvContent = BOM + rows.join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    setStatus(`✅ 已导出表格 ${fileName}（共 ${state.comments.length} 条评论）`);
-}
-
-// ========== 素材信息提取（独立于文案提取） ==========
-// ========== 笔记内容提取 ==========
-function collectMediaInfo() {
-    const container = document.querySelector('#noteContainer');
-    if (!container) return null;
-
-    // 笔记ID
-    const urlMatch = window.location.href.match(/\/explore\/([a-f0-9]+)/);
-    const noteId = urlMatch ? urlMatch[1] : 'unknown';
-
-    // 标题
-    const titleEl = document.querySelector('#detail-title');
-    const title = titleEl ? titleEl.innerText.trim() : '';
-
-    // 图片
-    const imgEls = document.querySelectorAll(
-        '.media-container .swiper-slide img, .note-content img, #noteContainer .note-slider-img'
-    );
-    const images = Array.from(imgEls)
-        .map((img) => {
-            let src = img.getAttribute('data-origin-src')
-                || img.getAttribute('data-src')
-                || img.src || '';
-            // 强制 HTTPS
-            if (src.startsWith('http:')) src = src.replace(/^http:/, 'https:');
-            else if (src.startsWith('//')) src = 'https:' + src;
-            return src.split('?')[0];
-        })
-        .filter((s) => s && (s.includes('xhscdn') || s.includes('sns-img') || s.includes('sns-webpic')))
-        .filter((v, i, a) => a.indexOf(v) === i);
-
-    // 视频（支持 media-container.video-player-media 和其他视频容器）
-    const videos = [];
-    const videoEls = document.querySelectorAll(
-        '.media-container video, .media-container source, .note-content video, #noteContainer video, #noteContainer source'
-    );
-    videoEls.forEach((el) => {
-        let src = el.src || '';
-        if (src) {
-            if (src.startsWith('http:')) src = src.replace(/^http:/, 'https:');
-            else if (src.startsWith('//')) src = 'https:' + src;
-            if (!videos.includes(src)) videos.push(src);
-        }
-    });
-    // 备选：从 video 标签的 poster 属性获取封面
-    // 也检查 xgplayer 等播放器的 data 属性
-    document.querySelectorAll('.media-container video[src], .media-container video').forEach((v) => {
-        let s = v.src || v.currentSrc || '';
-        if (s) {
-            if (s.startsWith('http:')) s = s.replace(/^http:/, 'https:');
-            else if (s.startsWith('//')) s = 'https:' + s;
-            if (!videos.includes(s)) videos.push(s);
-        }
-    });
-
-    // 日期
-    const dateEl = document.querySelector('#noteContainer .date, #noteContainer .bottom-container .date');
-    const publishDate = dateEl ? dateEl.innerText.trim().replace(/[\s:]/g, '').substring(0, 10) : '';
-
-    return { noteId, title, images, videos, publishDate };
-}
-
-// 清理文件名中的特殊字符
-function sanitize(str, maxLen = 30) {
-    return (str || '').replace(/[\\/:*?"<>|\n\r]/g, '_').substring(0, maxLen).trim() || 'untitled';
-}
-
-// ========== 打包下载素材（图片 + 视频 → ZIP） ==========
-// ========== 打包下载素材（图片 + 视频 → ZIP） ==========
-async function downloadMedia() {
-    const media = collectMediaInfo();
-    if (!media) {
-        setStatus('❌ 未检测到笔记详情，请先打开一篇笔记');
-        return;
+    function buildCSVRow(fields) {
+        return fields.map(csvEscape).join(',');
     }
 
-    const totalImages = media.images.length;
-    const totalVideos = media.videos.length;
-    const totalFiles = totalImages + totalVideos;
-
-    if (totalFiles === 0) {
-        setStatus('❌ 未找到可下载的图片或视频');
-        return;
-    }
-
-    setStatus(`⏳ 检测到 ${totalImages} 张图片 + ${totalVideos} 个视频，开始打包...`);
-
-    // 检查 JSZip 是否可用，兼容 window.JSZip
-    let JSZipConstructor = window.JSZip;
-    if (typeof JSZip !== 'undefined') {
-        JSZipConstructor = JSZip;
-    }
-
-    if (!JSZipConstructor) {
-        setStatus('⏳ 正在加载压缩库...');
-        try {
-            await loadJSZip();
-            JSZipConstructor = window.JSZip; // 再次尝试获取
-        } catch (e) {
-            setStatus('❌ 压缩库加载失败，无法打包');
-            console.error(e);
+    // ========== 导出 CSV 表格 ==========
+    function exportCSV() {
+        if (!state.noteData && state.comments.length === 0 && state.searchResults.length === 0) {
+            setStatus('❌ 没有数据可导出，请先提取笔记内容、评论或搜索结果');
             return;
         }
-    }
 
-    if (!JSZipConstructor) {
-        setStatus('❌ JSZip 未定义，无法启动压缩');
-        return;
-    }
+        const rows = [];
+        const note = state.noteData || {};
 
-    const zip = new JSZipConstructor();
-    let downloaded = 0;
-
-    // 下载图片
-    for (let i = 0; i < totalImages; i++) {
-        const url = media.images[i];
-        const ext = url.includes('.png') ? 'png' : 'jpg';
-        const fileName = `img_${i + 1}.${ext}`;
-        try {
-            // 使用 GM_xmlhttpRequest 获取 ArrayBuffer
-            const buffer = await gmFetch(url);
-            zip.file(fileName, buffer);
-            downloaded++;
-            setStatus(`⏳ 下载中 ${downloaded}/${totalFiles}...`);
-        } catch (e) {
-            console.warn('[XHS-DL] 图片下载失败:', url, e);
-            setStatus(`⚠️ 图片 ${i + 1} 下载失败，跳过`);
+        if (state.noteData || state.comments.length > 0) {
+            // ---- 笔记信息区 ----
+            rows.push(buildCSVRow(['=== 笔记详情信息 ===', '', '', '', '']));
+            rows.push(buildCSVRow(['笔记ID', note.noteId || '']));
+            rows.push(buildCSVRow(['标题', note.title || '']));
+            rows.push(buildCSVRow(['作者', note.author || '']));
+            rows.push(buildCSVRow(['发布日期', note.publishDate || '']));
+            rows.push(buildCSVRow(['IP属地', note.ipLocation || '']));
+            rows.push(buildCSVRow(['点赞', note.likes || '', '收藏', note.collects || '', '评论数', note.commentsCount || '']));
+            rows.push(buildCSVRow(['正文', note.desc || '']));
+            rows.push(buildCSVRow(['标签', (note.tags || []).join(' ')]));
+            rows.push(buildCSVRow(['图片链接', (note.images || []).join(' | ')]));
+            if (note.video) rows.push(buildCSVRow(['视频链接', note.video]));
+            rows.push(buildCSVRow(['原文链接', note.url || '']));
+            rows.push(buildCSVRow(['提取时间', note.extractedAt || new Date().toISOString()]));
+            rows.push(''); // 空行分隔
         }
-        await sleep(300);
-    }
 
-    // 下载视频
-    for (let i = 0; i < totalVideos; i++) {
-        const url = media.videos[i];
-        const ext = url.includes('.mp4') ? 'mp4' : (url.includes('.webm') ? 'webm' : 'mp4');
-        const fileName = `video_${i + 1}.${ext}`;
-        try {
-            setStatus(`⏳ 下载视频 ${i + 1}/${totalVideos}（文件较大，请稍候）...`);
-            // 使用 GM_xmlhttpRequest 获取 ArrayBuffer
-            const buffer = await gmFetch(url);
-            zip.file(fileName, buffer);
-            downloaded++;
-            setStatus(`⏳ 下载中 ${downloaded}/${totalFiles}...`);
-        } catch (e) {
-            console.warn('[XHS-DL] 视频下载失败:', url, e);
-            setStatus(`⚠️ 视频 ${i + 1} 下载失败，跳过`);
-        }
-    }
+        // ---- 评论明细区 ----
+        rows.push(buildCSVRow(['=== 评论明细 ===', '', '', '', '']));
+        rows.push(buildCSVRow(['序号', '用户', '评论内容', '评论时间', '点赞数', '类型']));
 
-    if (downloaded === 0) {
-        setStatus('❌ 所有文件下载失败');
-        return;
-    }
-
-    // 生成 ZIP 并触发下载
-    setStatus('⏳ 正在压缩打包...');
-    const today = new Date();
-    const dateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
-    const zipName = `${media.noteId}_${sanitize(media.title)}_${dateStr}.zip`;
-
-    try {
-        const zipBlob = await zip.generateAsync({ type: 'blob' }, (meta) => {
-            setStatus(`⏳ 压缩中 ${Math.round(meta.percent)}%...`);
+        let idx = 1;
+        state.comments.forEach((c) => {
+            rows.push(buildCSVRow([idx++, c.user, c.content, c.date, c.likes || '', '主评论']));
+            // 子评论/回复
+            if (c.replies && c.replies.length > 0) {
+                c.replies.forEach((r) => {
+                    rows.push(buildCSVRow([idx++, r.user, r.content, r.date, '', '↳ 回复']));
+                });
+            }
         });
 
-        const blobUrl = URL.createObjectURL(zipBlob);
+        // 添加统计行
+        rows.push('');
+        rows.push(buildCSVRow(['合计评论数', state.comments.length]));
+
+        // ---- 搜索结果区 ----
+        if (state.searchResults.length > 0) {
+            rows.push('');
+            rows.push(buildCSVRow(['=== 搜索结果列表 ===', '', '', '', '', '']));
+            rows.push(buildCSVRow(['序号', '笔记ID', '标题', '作者', '点赞数', '链接']));
+            state.searchResults.forEach((item, i) => {
+                rows.push(buildCSVRow([i + 1, item.id, item.title, item.author, item.likes, item.url]));
+            });
+        }
+
+        rows.push('');
+        rows.push(buildCSVRow(['导出时间', new Date().toISOString()]));
+
+        const fileName = note.noteId
+            ? `xhs_${note.noteId}_${(note.title || '').substring(0, 20).replace(/[\\/:*?"<>|]/g, '_')}.csv`
+            : `xhs_search_export_${Date.now()}.csv`;
+
+        // BOM + CSV 内容（确保 Excel 正确识别 UTF-8）
+        const BOM = '\uFEFF';
+        const csvContent = BOM + rows.join('\r\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = blobUrl;
-        a.download = zipName;
-        a.style.display = 'none';
+        a.href = url;
+        a.download = fileName;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000); // 延时释放
+        URL.revokeObjectURL(url);
 
-        setStatus(`✅ 打包完成！${downloaded} 个文件 → ${zipName}`);
-    } catch (e) {
-        setStatus('❌ 压缩打包失败，请查看控制台');
-        console.error('[XHS-DL] ZIP生成失败:', e);
+        setStatus(`✅ 已导出表格 ${fileName}（共 ${state.comments.length} 条评论）`);
     }
-}
 
-// 动态加载 JSZip（备用，以防 @require 未生效）
-function loadJSZip() {
-    return new Promise((resolve, reject) => {
-        if (window.JSZip || typeof JSZip !== 'undefined') return resolve(); // 已经有了
-        const s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
-        s.onload = resolve;
-        s.onerror = () => reject(new Error('JSZip 加载失败'));
-        document.head.appendChild(s);
-    });
-}
+    // ========== 素材信息提取（独立于文案提取） ==========
+    // ========== 笔记内容提取 ==========
+    function collectMediaInfo() {
+        const container = document.querySelector('#noteContainer');
+        if (!container) return null;
 
-// ========== 初始化 ==========
-// 等待页面加载完成后注入UI
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', createUI);
-} else {
-    createUI();
-}
-}) ();
+        // 笔记ID
+        const urlMatch = window.location.href.match(/\/explore\/([a-f0-9]+)/);
+        const noteId = urlMatch ? urlMatch[1] : 'unknown';
+
+        // 标题
+        const titleEl = document.querySelector('#detail-title');
+        const title = titleEl ? titleEl.innerText.trim() : '';
+
+        // 图片
+        const imgEls = document.querySelectorAll(
+            '.media-container .swiper-slide img, .note-content img, #noteContainer .note-slider-img'
+        );
+        const images = Array.from(imgEls)
+            .map((img) => {
+                let src = img.getAttribute('data-origin-src')
+                    || img.getAttribute('data-src')
+                    || img.src || '';
+                // 强制 HTTPS
+                if (src.startsWith('http:')) src = src.replace(/^http:/, 'https:');
+                else if (src.startsWith('//')) src = 'https:' + src;
+                return src.split('?')[0];
+            })
+            .filter((s) => s && (s.includes('xhscdn') || s.includes('sns-img') || s.includes('sns-webpic')))
+            .filter((v, i, a) => a.indexOf(v) === i);
+
+        // 视频（支持 media-container.video-player-media 和其他视频容器）
+        const videos = [];
+        const videoEls = document.querySelectorAll(
+            '.media-container video, .media-container source, .note-content video, #noteContainer video, #noteContainer source'
+        );
+        videoEls.forEach((el) => {
+            let src = el.src || '';
+            if (src) {
+                if (src.startsWith('http:')) src = src.replace(/^http:/, 'https:');
+                else if (src.startsWith('//')) src = 'https:' + src;
+                if (!videos.includes(src)) videos.push(src);
+            }
+        });
+        // 备选：从 video 标签的 poster 属性获取封面
+        // 也检查 xgplayer 等播放器的 data 属性
+        document.querySelectorAll('.media-container video[src], .media-container video').forEach((v) => {
+            let s = v.src || v.currentSrc || '';
+            if (s) {
+                if (s.startsWith('http:')) s = s.replace(/^http:/, 'https:');
+                else if (s.startsWith('//')) s = 'https:' + s;
+                if (!videos.includes(s)) videos.push(s);
+            }
+        });
+
+        // 日期
+        const dateEl = document.querySelector('#noteContainer .date, #noteContainer .bottom-container .date');
+        const publishDate = dateEl ? dateEl.innerText.trim().replace(/[\s:]/g, '').substring(0, 10) : '';
+
+        return { noteId, title, images, videos, publishDate };
+    }
+
+    // 清理文件名中的特殊字符
+    function sanitize(str, maxLen = 30) {
+        return (str || '').replace(/[\\/:*?"<>|\n\r]/g, '_').substring(0, maxLen).trim() || 'untitled';
+    }
+
+    // ========== 打包下载素材（图片 + 视频 → ZIP） ==========
+    // ========== 打包下载素材（图片 + 视频 → ZIP） ==========
+    async function downloadMedia() {
+        const media = collectMediaInfo();
+        if (!media) {
+            setStatus('❌ 未检测到笔记详情，请先打开一篇笔记');
+            return;
+        }
+
+        const totalImages = media.images.length;
+        const totalVideos = media.videos.length;
+        const totalFiles = totalImages + totalVideos;
+
+        if (totalFiles === 0) {
+            setStatus('❌ 未找到可下载的图片或视频');
+            return;
+        }
+
+        setStatus(`⏳ 检测到 ${totalImages} 张图片 + ${totalVideos} 个视频，开始打包...`);
+
+        // 检查 JSZip 是否可用，兼容 window.JSZip
+        let JSZipConstructor = window.JSZip;
+        if (typeof JSZip !== 'undefined') {
+            JSZipConstructor = JSZip;
+        }
+
+        if (!JSZipConstructor) {
+            setStatus('⏳ 正在加载压缩库...');
+            try {
+                await loadJSZip();
+                JSZipConstructor = window.JSZip; // 再次尝试获取
+            } catch (e) {
+                setStatus('❌ 压缩库加载失败，无法打包');
+                console.error(e);
+                return;
+            }
+        }
+
+        if (!JSZipConstructor) {
+            setStatus('❌ JSZip 未定义，无法启动压缩');
+            return;
+        }
+
+        const zip = new JSZipConstructor();
+        let downloaded = 0;
+
+        // 下载图片
+        for (let i = 0; i < totalImages; i++) {
+            const url = media.images[i];
+            const ext = url.includes('.png') ? 'png' : 'jpg';
+            const fileName = `img_${i + 1}.${ext}`;
+            try {
+                // 使用 GM_xmlhttpRequest 获取 ArrayBuffer
+                const buffer = await gmFetch(url);
+                zip.file(fileName, buffer);
+                downloaded++;
+                setStatus(`⏳ 下载中 ${downloaded}/${totalFiles}...`);
+            } catch (e) {
+                console.warn('[XHS-DL] 图片下载失败:', url, e);
+                setStatus(`⚠️ 图片 ${i + 1} 下载失败，跳过`);
+            }
+            await sleep(300);
+        }
+
+        // 下载视频
+        for (let i = 0; i < totalVideos; i++) {
+            const url = media.videos[i];
+            const ext = url.includes('.mp4') ? 'mp4' : (url.includes('.webm') ? 'webm' : 'mp4');
+            const fileName = `video_${i + 1}.${ext}`;
+            try {
+                setStatus(`⏳ 下载视频 ${i + 1}/${totalVideos}（文件较大，请稍候）...`);
+                // 使用 GM_xmlhttpRequest 获取 ArrayBuffer
+                const buffer = await gmFetch(url);
+                zip.file(fileName, buffer);
+                downloaded++;
+                setStatus(`⏳ 下载中 ${downloaded}/${totalFiles}...`);
+            } catch (e) {
+                console.warn('[XHS-DL] 视频下载失败:', url, e);
+                setStatus(`⚠️ 视频 ${i + 1} 下载失败，跳过`);
+            }
+        }
+
+        if (downloaded === 0) {
+            setStatus('❌ 所有文件下载失败');
+            return;
+        }
+
+        // 生成 ZIP 并触发下载
+        setStatus('⏳ 正在压缩打包...');
+        const today = new Date();
+        const dateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+        const zipName = `${media.noteId}_${sanitize(media.title)}_${dateStr}.zip`;
+
+        try {
+            const zipBlob = await zip.generateAsync({ type: 'blob' }, (meta) => {
+                setStatus(`⏳ 压缩中 ${Math.round(meta.percent)}%...`);
+            });
+
+            const blobUrl = URL.createObjectURL(zipBlob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = zipName;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 10000); // 延时释放
+
+            setStatus(`✅ 打包完成！${downloaded} 个文件 → ${zipName}`);
+        } catch (e) {
+            setStatus('❌ 压缩打包失败，请查看控制台');
+            console.error('[XHS-DL] ZIP生成失败:', e);
+        }
+    }
+
+    // 动态加载 JSZip（备用，以防 @require 未生效）
+    function loadJSZip() {
+        return new Promise((resolve, reject) => {
+            if (window.JSZip || typeof JSZip !== 'undefined') return resolve(); // 已经有了
+            const s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+            s.onload = resolve;
+            s.onerror = () => reject(new Error('JSZip 加载失败'));
+            document.head.appendChild(s);
+        });
+    }
+
+    // ========== 初始化 ==========
+    // 等待页面加载完成后注入UI
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', createUI);
+    } else {
+        createUI();
+    }
+})();
