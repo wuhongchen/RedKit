@@ -21,19 +21,27 @@
     // 封装 GM_xmlhttpRequest 为 Promise，用于跨域请求
     function gmFetch(url) {
         return new Promise((resolve, reject) => {
+            if (!url) return reject(new Error('Empty URL'));
+
             GM_xmlhttpRequest({
                 method: 'GET',
                 url: url,
-                responseType: 'arraybuffer', // 改为 arraybuffer 以兼容 JSZip
+                responseType: 'arraybuffer',
+                timeout: 15000, // 增加超时控制
                 onload: (res) => {
                     if (res.status === 200) {
                         resolve(res.response);
                     } else {
-                        reject(new Error(`HTTP ${res.status}`));
+                        reject(new Error(`HTTP ${res.status} for ${url}`));
                     }
                 },
                 onerror: (err) => {
-                    reject(err);
+                    console.error('[XHS-DL] Network Error:', err, url);
+                    reject(new Error('Network Error'));
+                },
+                ontimeout: () => {
+                    console.error('[XHS-DL] Request Timeout:', url);
+                    reject(new Error('Timeout'));
                 }
             });
         });
@@ -572,12 +580,16 @@
                 let src = img.getAttribute('data-origin-src')
                     || img.getAttribute('data-src')
                     || img.src || '';
-                // 强制 HTTPS
-                if (src.startsWith('http:')) src = src.replace(/^http:/, 'https:');
-                else if (src.startsWith('//')) src = 'https:' + src;
-                return src.split('?')[0];
+                if (!src) return '';
+                // 统一协议
+                if (src.startsWith('//')) src = 'https:' + src;
+                // 如果是 HTTP 且不是 localhost，尝试 HTTPS（顺应浏览器 Mixed Content 策略）
+                if (src.startsWith('http://') && !src.includes('127.0.0.1')) {
+                    src = src.replace('http://', 'https://');
+                }
+                return src;
             })
-            .filter((s) => s && (s.includes('xhscdn') || s.includes('sns-img') || s.includes('sns-webpic')))
+            .filter((s) => s && (s.includes('xhscdn.com') || s.includes('sns-img') || s.includes('sns-webpic')))
             .filter((v, i, a) => a.indexOf(v) === i);
 
         // 视频（支持 media-container.video-player-media 和其他视频容器）
@@ -586,10 +598,12 @@
             '.media-container video, .media-container source, .note-content video, #noteContainer video, #noteContainer source'
         );
         videoEls.forEach((el) => {
-            let src = el.src || '';
+            let src = el.src || el.currentSrc || '';
             if (src) {
-                if (src.startsWith('http:')) src = src.replace(/^http:/, 'https:');
-                else if (src.startsWith('//')) src = 'https:' + src;
+                if (src.startsWith('//')) src = 'https:' + src;
+                if (src.startsWith('http://') && !src.includes('127.0.0.1')) {
+                    src = src.replace('http://', 'https://');
+                }
                 if (!videos.includes(src)) videos.push(src);
             }
         });
@@ -598,8 +612,10 @@
         document.querySelectorAll('.media-container video[src], .media-container video').forEach((v) => {
             let s = v.src || v.currentSrc || '';
             if (s) {
-                if (s.startsWith('http:')) s = s.replace(/^http:/, 'https:');
-                else if (s.startsWith('//')) s = 'https:' + s;
+                if (s.startsWith('//')) s = 'https:' + s;
+                if (s.startsWith('http://') && !s.includes('127.0.0.1')) {
+                    s = s.replace('http://', 'https://');
+                }
                 if (!videos.includes(s)) videos.push(s);
             }
         });
