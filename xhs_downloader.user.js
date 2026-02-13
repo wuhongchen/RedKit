@@ -195,7 +195,11 @@
         <div id="xdl-detail-tools" style="${isExplorePage() ? '' : 'display:none'}">
           <button class="xdl-btn primary"   id="xdl-extract-note">📝 提取笔记内容</button>
           <button class="xdl-btn primary"   id="xdl-extract-comments">💬 提取全部评论</button>
-          <button class="xdl-btn secondary" id="xdl-download-media">📦 打包下载素材</button>
+          <div style="display: flex; gap: 5px;">
+            <button class="xdl-btn secondary" id="xdl-download-media" title="打包下载全部图片和视频">📦 全量打包</button>
+            <button class="xdl-btn secondary" id="xdl-download-direct" title="不打包，直接逐个触发下载">📥 逐个下载</button>
+          </div>
+          <button class="xdl-btn success"   id="xdl-copy-links">📋 复制素材链接</button>
         </div>
         <div id="xdl-search-tools" style="${isSearchPage() ? '' : 'display:none'}">
           <button class="xdl-btn primary"   id="xdl-extract-search">🔍 抓取搜索结果</button>
@@ -216,6 +220,8 @@
         if (document.getElementById('xdl-extract-note')) document.getElementById('xdl-extract-note').onclick = extractNote;
         if (document.getElementById('xdl-extract-comments')) document.getElementById('xdl-extract-comments').onclick = extractComments;
         if (document.getElementById('xdl-extract-search')) document.getElementById('xdl-extract-search').onclick = extractSearchResults;
+        if (document.getElementById('xdl-download-direct')) document.getElementById('xdl-download-direct').onclick = individualDownload;
+        if (document.getElementById('xdl-copy-links')) document.getElementById('xdl-copy-links').onclick = copyMediaUrls;
         document.getElementById('xdl-export-csv').onclick = exportCSV;
         document.getElementById('xdl-download-media').onclick = downloadMedia;
     }
@@ -765,8 +771,82 @@
         } catch (e) {
             console.error('[XHS-DL] 压缩打包关键错误:', e);
             setStatus(`❌ 打包失败: ${e.message || '未知错误'}`);
-            alert('打包过程出错，详细错误请看控制台：\n' + e.stack);
+            alert('打包过程出错，详细错误请看控制台。\n\n建议使用“逐个下载”或“复制链接”模式！');
         }
+    }
+
+    // ========== 替代下载方案 (逐个下载) ==========
+    async function individualDownload() {
+        const media = collectMediaInfo();
+        if (!media || (media.images.length === 0 && media.videos.length === 0)) {
+            setStatus('❌ 未找到可下载的素材');
+            return;
+        }
+
+        setStatus(`⏳ 准备逐个下载 ${media.images.length + media.videos.length} 个文件...`);
+
+        let count = 0;
+        const total = media.images.length + media.videos.length;
+
+        // 下载图片
+        for (let i = 0; i < media.images.length; i++) {
+            const url = media.images[i];
+            const ext = url.includes('.png') ? 'png' : 'jpg';
+            const fileName = `${media.noteId}_img_${i + 1}.${ext}`;
+            GM_download({
+                url: url,
+                name: fileName,
+                onload: () => console.log('[XHS-DL] 下载成功:', fileName),
+                onerror: (err) => console.error('[XHS-DL] 下载失败:', fileName, err)
+            });
+            count++;
+            setStatus(`📥 正在触发下载 ${count}/${total}...`);
+            await sleep(500); // 间隔一下，防止浏览器弹窗频率限制
+        }
+
+        // 下载视频
+        for (let i = 0; i < media.videos.length; i++) {
+            const url = media.videos[i];
+            const fileName = `${media.noteId}_video_${i + 1}.mp4`;
+            GM_download({
+                url: url,
+                name: fileName,
+                onload: () => console.log('[XHS-DL] 下载成功:', fileName)
+            });
+            count++;
+            setStatus(`📥 正在触发下载 ${count}/${total}...`);
+            await sleep(500);
+        }
+
+        setStatus(`✅ 已触发 ${count} 个文件的下载请求`);
+    }
+
+    // ========== 替代下载方案 (复制链接) ==========
+    function copyMediaUrls() {
+        const media = collectMediaInfo();
+        if (!media || (media.images.length === 0 && media.videos.length === 0)) {
+            setStatus('❌ 未找到素材链接');
+            return;
+        }
+
+        const allUrls = [...media.images, ...media.videos].join('\n');
+
+        // 使用创建文本域的方式复制，兼容性更好
+        const textArea = document.createElement('textarea');
+        textArea.value = allUrls;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            setStatus(`✅ 已成功复制 ${media.images.length + media.videos.length} 个链接`);
+            alert('素材链接已复制到剪贴板，您可以粘贴到 IDM 或其他下载工具中。');
+        } catch (err) {
+            console.error('复制失败:', err);
+            setStatus('❌ 复制链接失败，请手动查看控制台');
+            console.log('--- 素材链接列表 ---');
+            console.log(allUrls);
+        }
+        document.body.removeChild(textArea);
     }
 
     // 动态加载 JSZip（备用，以防 @require 未生效）
