@@ -595,33 +595,43 @@
             .filter((s) => s && (s.includes('xhscdn.com') || s.includes('sns-img') || s.includes('sns-webpic')))
             .filter((v, i, a) => a.indexOf(v) === i);
 
-        // 视频（支持 media-container.video-player-media 和其他视频容器）
+        // 视频检测增强：尝试从 el.src 获取，若为 blob 则尝试从 unsafeWindow 提取
         const videos = [];
-        const videoEls = document.querySelectorAll(
-            '.media-container video, .media-container source, .note-content video, #noteContainer video, #noteContainer source'
-        );
-        videoEls.forEach((el) => {
+        document.querySelectorAll('.media-container video, .media-container source, #noteContainer video').forEach((el) => {
             let src = el.src || el.currentSrc || '';
-            if (src) {
+            if (src && !src.startsWith('blob:') && !videos.includes(src)) {
                 if (src.startsWith('//')) src = 'https:' + src;
                 if (src.startsWith('http://') && !src.includes('127.0.0.1')) {
                     src = src.replace('http://', 'https://');
                 }
-                if (!videos.includes(src)) videos.push(src);
+                videos.push(src);
             }
         });
-        // 备选：从 video 标签的 poster 属性获取封面
-        // 也检查 xgplayer 等播放器的 data 属性
-        document.querySelectorAll('.media-container video[src], .media-container video').forEach((v) => {
-            let s = v.src || v.currentSrc || '';
-            if (s) {
-                if (s.startsWith('//')) s = 'https:' + s;
-                if (s.startsWith('http://') && !s.includes('127.0.0.1')) {
-                    s = s.replace('http://', 'https://');
+
+        // 如果 DOM 中没找到直链，尝试从页面深度状态中提取 (针对使用了 MSE 播放器的视频)
+        try {
+            const state = typeof unsafeWindow !== 'undefined' ? unsafeWindow.__INITIAL_STATE__ : null;
+            if (state && state.note && state.note.noteDetailMap) {
+                const detail = state.note.noteDetailMap[noteId] || Object.values(state.note.noteDetailMap)[0];
+                if (detail && detail.note && detail.note.video) {
+                    const stream = detail.note.video.media.stream;
+                    // 尝试获取 h264 或 h265 最高的清晰度
+                    const videoUrls = [
+                        ...(stream.h264 || []),
+                        ...(stream.h265 || []),
+                        ...(stream.av1 || [])
+                    ].map(v => v.masterUrl).filter(Boolean);
+
+                    videoUrls.forEach(url => {
+                        let s = url;
+                        if (s.startsWith('//')) s = 'https:' + s;
+                        if (!videos.includes(s)) videos.push(s);
+                    });
                 }
-                if (!videos.includes(s)) videos.push(s);
             }
-        });
+        } catch (e) {
+            console.warn('[XHS-DL] 尝试从状态抓取视频链接失败:', e);
+        }
 
         // 日期
         const dateEl = document.querySelector('#noteContainer .date, #noteContainer .bottom-container .date');
@@ -668,16 +678,29 @@
 
         // 下载视频
         for (let i = 0; i < media.videos.length; i++) {
-            const url = media.videos[i];
+            let url = media.videos[i];
             const fileName = `${media.noteId}_video_${i + 1}.mp4`;
+
+            console.log('[XHS-DL] 尝试下载视频:', url);
             GM_download({
                 url: url,
                 name: fileName,
-                onload: () => console.log('[XHS-DL] 下载成功:', fileName)
+                onload: () => {
+                    console.log('[XHS-DL] 视频下载成功:', fileName);
+                    setStatus(`✅ 视频下载成功: ${fileName}`);
+                },
+                onerror: (err) => {
+                    console.error('[XHS-DL] 视频下载异常:', err, url);
+                    setStatus(`❌ 视频下载失败: ${err.error || '未知原因'}`);
+                    // 如果 GM_download 失败，尝试在新标签页打开链接让用户手动下载
+                    if (confirm(`视频下载被拦截或失败，是否尝试在浏览器新标签页手动打开并保存？\n\n错误：${err.error}`)) {
+                        window.open(url, '_blank');
+                    }
+                }
             });
             count++;
             setStatus(`📥 正在触发下载 ${count}/${total}...`);
-            await sleep(500);
+            await sleep(1000); // 增加间隔，给浏览器更长的响应时间
         }
 
         setStatus(`✅ 已触发 ${count} 个文件的下载请求`);
