@@ -4,3 +4,4 @@ node_modules/
 *.new
 *.csv
 *.zip
+.agent/
