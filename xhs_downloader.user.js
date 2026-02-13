@@ -308,18 +308,22 @@
         let likes = '0', collects = '0', commentsCount = '0';
         if (engageBar) {
             // 通过具体的容器类名二次确认
-            const likeWrapper = engageBar.querySelector('.like-wrapper, .like-container, [class*="like"]');
+            const likeWrapper = engageBar.querySelector('.like-wrapper, .like-container, [class*="like"], .like-active');
             const collectWrapper = engageBar.querySelector('.collect-wrapper, .star-wrapper, [class*="collect"]');
             const commentWrapper = engageBar.querySelector('.chat-wrapper, .comment-wrapper, [class*="chat"]');
 
-            const getVal = (el) => {
-                if (!el) return '0';
-                const countEl = el.querySelector('.count, span');
-                const val = countEl ? countEl.innerText.trim() : el.innerText.trim();
+            // 备选：针对用户提供的特定路径进行深度搜索
+            const deepLike = document.querySelector('.interaction-container .like-wrapper .count, .interact-container .like-wrapper .count');
+
+            const getVal = (el, fallbackEl) => {
+                const target = el || fallbackEl;
+                if (!target) return '0';
+                const countEl = target.querySelector('.count, span');
+                const val = countEl ? countEl.innerText.trim() : target.innerText.trim();
                 return (val === '点赞' || val === '赞' || val === '收藏' || !val) ? '0' : val;
             };
 
-            likes = getVal(likeWrapper);
+            likes = getVal(likeWrapper, deepLike);
             collects = getVal(collectWrapper);
             commentsCount = getVal(commentWrapper);
         }
@@ -453,9 +457,20 @@
 
             setStatus(`⏳ 已提取 ${state.comments.length} 条评论，滚动加载中...`);
 
+            // 检查是否已经到达底部或达到 200 条限制
+            const isBottom = document.querySelector('.end-container, .no-more, .comments-el .end-container');
+            if (isBottom) {
+                console.log('[XHS-DL] 检测到评论到底了');
+                break;
+            }
+            if (state.comments.length >= 200) {
+                console.log('[XHS-DL] 达到 200 条评论限制，停止抓取');
+                break;
+            }
+
             // 向下滚动加载更多评论（随机 3~5 秒间隔，模拟人类操作）
             scroller.scrollTop = scroller.scrollHeight;
-            const scrollDelay = 3000 + Math.floor(Math.random() * 2000);
+            const scrollDelay = 2000 + Math.floor(Math.random() * 2000); // 稍微加快一点点
             await sleep(scrollDelay);
 
             // 检查是否有"展开更多评论"的按钮并点击
