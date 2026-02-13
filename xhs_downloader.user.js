@@ -180,6 +180,23 @@
         .xdl-btn.secondary { background: #f0f0f0; color: #333; }
         .xdl-btn.success { background: linear-gradient(135deg,#00c853,#00e676); color:#fff; }
         .xdl-btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+        /* 进度条样式 */
+        .xdl-btn.loading {
+            position: relative;
+            background: #eee !important;
+            color: #999 !important;
+            overflow: hidden;
+        }
+        .xdl-btn.loading::after {
+            content: '';
+            position: absolute; left: 0; top: 0; bottom: 0;
+            width: var(--progress, 0%);
+            background: linear-gradient(135deg, #00c853 0%, #00e676 100%);
+            transition: width 0.3s;
+            z-index: 0;
+            opacity: 0.3;
+        }
+        .xdl-btn.loading span { position: relative; z-index: 1; }
         #xdl-status {
           margin-top: 10px; padding: 8px; border-radius: 8px;
           background: #f8f8f8; color: #666; font-size: 12px;
@@ -192,12 +209,12 @@
       <div id="xhs-dl-menu">
         <h3>📥 笔记下载器</h3>
         <div id="xdl-detail-tools" style="${isExplorePage() ? '' : 'display:none'}">
-          <button class="xdl-btn primary"   id="xdl-extract-note">📝 提取笔记内容</button>
-          <button class="xdl-btn primary"   id="xdl-extract-comments">💬 提取全部评论</button>
+          <button class="xdl-btn primary"   id="xdl-extract-note"><span>📝 提取笔记内容</span></button>
+          <button class="xdl-btn primary"   id="xdl-extract-comments"><span>💬 提取全部评论</span></button>
           <div style="display: flex; gap: 5px;">
-            <button class="xdl-btn secondary" id="xdl-download-direct" style="flex:1" title="确认下载所有检测出的图片和视频">📥 逐个下载素材</button>
+            <button class="xdl-btn secondary" id="xdl-download-direct" style="flex:1" title="确认下载所有检测出的图片和视频"><span>📥 逐个下载素材</span></button>
           </div>
-          <button class="xdl-btn success"   id="xdl-copy-links">📋 复制素材链接</button>
+          <button class="xdl-btn success"   id="xdl-copy-links"><span>📋 复制素材链接</span></button>
         </div>
         <div id="xdl-search-tools" style="${isSearchPage() ? '' : 'display:none'}">
           <button class="xdl-btn primary"   id="xdl-extract-search">🔍 抓取搜索结果</button>
@@ -286,17 +303,25 @@
         const authorEl = document.querySelector('.author-wrapper .name, .author-wrapper a');
         const author = authorEl ? authorEl.innerText.trim() : '';
 
-        // 互动数据
-        const engageBar = document.querySelector('.engage-bar');
-        let likes = '', collects = '', commentsCount = '';
+        // 互动数据采集优化
+        const engageBar = document.querySelector('.engage-bar, .interaction-container');
+        let likes = '0', collects = '0', commentsCount = '0';
         if (engageBar) {
-            const spans = engageBar.querySelectorAll('.count, span[class*="count"]');
-            const likeBtn = engageBar.querySelector('.like-wrapper .count, .like-wrapper span');
-            const collectBtn = engageBar.querySelector('.collect-wrapper .count, .collect-wrapper span');
-            const commentBtn = engageBar.querySelector('.chat-wrapper .count, .chat-wrapper span');
-            likes = likeBtn ? likeBtn.innerText.trim() : '';
-            collects = collectBtn ? collectBtn.innerText.trim() : '';
-            commentsCount = commentBtn ? commentBtn.innerText.trim() : '';
+            // 通过具体的容器类名二次确认
+            const likeWrapper = engageBar.querySelector('.like-wrapper, .like-container, [class*="like"]');
+            const collectWrapper = engageBar.querySelector('.collect-wrapper, .star-wrapper, [class*="collect"]');
+            const commentWrapper = engageBar.querySelector('.chat-wrapper, .comment-wrapper, [class*="chat"]');
+
+            const getVal = (el) => {
+                if (!el) return '0';
+                const countEl = el.querySelector('.count, span');
+                const val = countEl ? countEl.innerText.trim() : el.innerText.trim();
+                return (val === '点赞' || val === '赞' || val === '收藏' || !val) ? '0' : val;
+            };
+
+            likes = getVal(likeWrapper);
+            collects = getVal(collectWrapper);
+            commentsCount = getVal(commentWrapper);
         }
 
         // 发布日期
@@ -342,8 +367,17 @@
             return;
         }
 
+        // 自动提取笔记基本内容
+        await extractNote();
+
         state.isExtracting = true;
         state.comments = [];
+
+        const btn = document.getElementById('xdl-extract-comments');
+        const exportBtn = document.getElementById('xdl-export-csv');
+        if (btn) btn.classList.add('loading');
+        if (exportBtn) exportBtn.disabled = true;
+
         setStatus('⏳ 开始提取评论，自动滚动加载中...');
 
         const scroller = document.querySelector('.note-scroller');
@@ -373,7 +407,9 @@
                 const name = nameEl ? nameEl.innerText.trim() : '';
                 const content = contentEl ? contentEl.innerText.trim() : '';
                 const date = parseXHSTime(dateEl ? dateEl.innerText.trim() : '');
-                const likeCount = likeEl ? likeEl.innerText.trim() : '';
+                let likeCount = likeEl ? likeEl.innerText.trim() : '0';
+                // 修复：如果点赞数为 0 时展示 0 而不是展示赞字
+                if (likeCount === '赞' || !likeCount) likeCount = '0';
 
                 if (!content) return; // 跳过空评论
 
@@ -411,6 +447,10 @@
                 noNewCount = 0;
             }
 
+            // 更新进度条（由于不知道总数，按滚动次数模拟步进，每发现一些就推一点，最高到95%）
+            const progress = Math.min(95, (seenSet.size / 50) * 10);
+            if (btn) btn.style.setProperty('--progress', `${progress}%`);
+
             setStatus(`⏳ 已提取 ${state.comments.length} 条评论，滚动加载中...`);
 
             // 向下滚动加载更多评论（随机 3~5 秒间隔，模拟人类操作）
@@ -427,6 +467,12 @@
         }
 
         state.isExtracting = false;
+        if (btn) {
+            btn.classList.remove('loading');
+            btn.style.setProperty('--progress', '100%');
+        }
+        if (exportBtn) exportBtn.disabled = false;
+
         setStatus(`✅ 评论提取完成！共 ${state.comments.length} 条评论`);
     }
 
