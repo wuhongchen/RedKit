@@ -298,34 +298,42 @@
         // 视频
         const videoEl = document.querySelector('.media-container video, .note-content video, #noteContainer video');
         const video = videoEl ? (videoEl.src || videoEl.querySelector('source')?.src || '') : '';
-
         // 作者
         const authorEl = document.querySelector('.author-wrapper .name, .author-wrapper a');
         const author = authorEl ? authorEl.innerText.trim() : '';
 
-        // 互动数据采集优化
-        const engageBar = document.querySelector('.engage-bar, .interaction-container');
+        // 互动数据采集优化：优先从页面状态获取真值 (100% 准确)
         let likes = '0', collects = '0', commentsCount = '0';
-        if (engageBar) {
-            // 通过具体的容器类名二次确认
-            const likeWrapper = engageBar.querySelector('.like-wrapper, .like-container, [class*="like"], .like-active');
-            const collectWrapper = engageBar.querySelector('.collect-wrapper, .star-wrapper, [class*="collect"]');
-            const commentWrapper = engageBar.querySelector('.chat-wrapper, .comment-wrapper, [class*="chat"]');
+        try {
+            const stateData = typeof unsafeWindow !== 'undefined' ? unsafeWindow.__INITIAL_STATE__ : null;
+            if (stateData && stateData.note && stateData.note.noteDetailMap) {
+                const detail = stateData.note.noteDetailMap[noteId] || Object.values(stateData.note.noteDetailMap)[0];
+                if (detail && detail.note && detail.note.interactInfo) {
+                    const info = detail.note.interactInfo;
+                    likes = info.likedCount || '0';
+                    collects = info.collectedCount || '0';
+                    commentsCount = info.commentCount || '0';
+                    console.log('[XHS-DL] 从状态库获取互动数据成功:', { likes, collects, commentsCount });
+                }
+            }
+        } catch (e) {
+            console.warn('[XHS-DL] 从状态库获取数据失败，尝试 DOM 取值:', e);
+        }
 
-            // 备选：针对用户提供的特定路径进行深度搜索
-            const deepLike = document.querySelector('.interaction-container .like-wrapper .count, .interact-container .like-wrapper .count');
-
-            const getVal = (el, fallbackEl) => {
-                const target = el || fallbackEl;
-                if (!target) return '0';
-                const countEl = target.querySelector('.count, span');
-                const val = countEl ? countEl.innerText.trim() : target.innerText.trim();
-                return (val === '点赞' || val === '赞' || val === '收藏' || !val) ? '0' : val;
-            };
-
-            likes = getVal(likeWrapper, deepLike);
-            collects = getVal(collectWrapper);
-            commentsCount = getVal(commentWrapper);
+        // 如果状态库取值失败，回退到 DOM 方案
+        if (likes === '0') {
+            const engageBar = document.querySelector('.engage-bar, .interaction-container, .interact-container');
+            if (engageBar) {
+                const getVal = (selector) => {
+                    const el = engageBar.querySelector(selector);
+                    if (!el) return null;
+                    const val = el.innerText.trim();
+                    return (val === '点赞' || val === '赞' || val === '收藏' || !val) ? '0' : val;
+                };
+                likes = getVal('.like-wrapper .count, .like-active .count') || likes;
+                collects = getVal('.collect-wrapper .count, .star-wrapper .count') || collects;
+                commentsCount = getVal('.chat-wrapper .count, .chat-container .count') || commentsCount;
+            }
         }
 
         // 发布日期
@@ -429,10 +437,13 @@
                     const subName = sub.querySelector('a.name, .name')?.innerText?.trim() || '';
                     const subContent = sub.querySelector('.content, .note-text')?.innerText?.trim() || '';
                     const subDate = parseXHSTime(sub.querySelector('.date')?.innerText?.trim() || '');
+                    let subLikes = sub.querySelector('.count, .like-count')?.innerText?.trim() || '0';
+                    if (subLikes === '赞' || !subLikes) subLikes = '0';
+
                     const subKey = `${subName}|${subContent}`;
                     if (!seenSet.has(subKey) && subContent) {
                         seenSet.add(subKey);
-                        subComments.push({ user: subName, content: subContent, date: subDate });
+                        subComments.push({ user: subName, content: subContent, date: subDate, likes: subLikes });
                     }
                 });
 
