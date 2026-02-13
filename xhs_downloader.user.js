@@ -2,14 +2,13 @@
 // @name         小红书笔记内容&评论下载器
 // @namespace    https://github.com/wuhongchen/RedKit
 // @version      1.2
-// @description  在小红书笔记详情页一键提取帖子内容、评论，导出 CSV 表格，或打包下载全部图片/视频素材。
+// @description  在小红书笔记详情页一键提取帖子内容、评论，导出 CSV 表格，支持逐个或链接复制素材下载。
 // @author       whc
 // @match        https://www.xiaohongshu.com/explore*
 // @match        https://www.xiaohongshu.com/search_result*
 // @icon         https://fe-video-qc.xhscdn.com/fe-platform/ed8fe781ce9e16c1bfac2cd962f0721edabe2e49.ico
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
-// @require      https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js
 // ==/UserScript==
 
 (function () {
@@ -196,8 +195,7 @@
           <button class="xdl-btn primary"   id="xdl-extract-note">📝 提取笔记内容</button>
           <button class="xdl-btn primary"   id="xdl-extract-comments">💬 提取全部评论</button>
           <div style="display: flex; gap: 5px;">
-            <button class="xdl-btn secondary" id="xdl-download-media" title="打包下载全部图片和视频">📦 全量打包</button>
-            <button class="xdl-btn secondary" id="xdl-download-direct" title="不打包，直接逐个触发下载">📥 逐个下载</button>
+            <button class="xdl-btn secondary" id="xdl-download-direct" style="flex:1" title="确认下载所有检测出的图片和视频">📥 逐个下载素材</button>
           </div>
           <button class="xdl-btn success"   id="xdl-copy-links">📋 复制素材链接</button>
         </div>
@@ -223,7 +221,6 @@
         if (document.getElementById('xdl-download-direct')) document.getElementById('xdl-download-direct').onclick = individualDownload;
         if (document.getElementById('xdl-copy-links')) document.getElementById('xdl-copy-links').onclick = copyMediaUrls;
         document.getElementById('xdl-export-csv').onclick = exportCSV;
-        document.getElementById('xdl-download-media').onclick = downloadMedia;
     }
 
     // 状态更新
@@ -640,141 +637,6 @@
 
     // ========== 打包下载素材（图片 + 视频 → ZIP） ==========
     // ========== 打包下载素材（图片 + 视频 → ZIP） ==========
-    async function downloadMedia() {
-        const media = collectMediaInfo();
-        if (!media) {
-            setStatus('❌ 未检测到笔记详情，请先打开一篇笔记');
-            return;
-        }
-
-        const totalImages = media.images.length;
-        const totalVideos = media.videos.length;
-        const totalFiles = totalImages + totalVideos;
-
-        if (totalFiles === 0) {
-            setStatus('❌ 未找到可下载的图片或视频');
-            return;
-        }
-
-        setStatus(`⏳ 检测到 ${totalImages} 张图片 + ${totalVideos} 个视频，开始打包...`);
-
-        // 检查 JSZip 是否可用，兼容 window.JSZip
-        let JSZipConstructor = window.JSZip;
-        if (typeof JSZip !== 'undefined') {
-            JSZipConstructor = JSZip;
-        }
-
-        if (!JSZipConstructor) {
-            setStatus('⏳ 正在加载压缩库...');
-            try {
-                await loadJSZip();
-                JSZipConstructor = window.JSZip; // 再次尝试获取
-            } catch (e) {
-                setStatus('❌ 压缩库加载失败，无法打包');
-                console.error(e);
-                return;
-            }
-        }
-
-        if (!JSZipConstructor) {
-            setStatus('❌ JSZip 未定义，无法启动压缩');
-            return;
-        }
-
-        const zip = new JSZipConstructor();
-        let downloaded = 0;
-
-        // 下载图片
-        for (let i = 0; i < totalImages; i++) {
-            const url = media.images[i];
-            const ext = url.includes('.png') ? 'png' : 'jpg';
-            const fileName = `img_${i + 1}.${ext}`;
-            try {
-                // 使用 GM_xmlhttpRequest 获取 ArrayBuffer
-                const buffer = await gmFetch(url);
-                if (buffer && buffer.byteLength > 0) {
-                    zip.file(fileName, new Uint8Array(buffer)); // 关键修复：包装为 Uint8Array
-                    downloaded++;
-                    setStatus(`⏳ 下载中 ${downloaded}/${totalFiles}...`);
-                } else {
-                    throw new Error('Empty buffer');
-                }
-            } catch (e) {
-                console.warn('[XHS-DL] 图片下载失败:', url, e);
-                setStatus(`⚠️ 图片 ${i + 1} 下载失败，跳过`);
-            }
-            await sleep(300);
-        }
-
-        // 下载视频
-        for (let i = 0; i < totalVideos; i++) {
-            const url = media.videos[i];
-            const ext = url.includes('.mp4') ? 'mp4' : (url.includes('.webm') ? 'webm' : 'mp4');
-            const fileName = `video_${i + 1}.${ext}`;
-            try {
-                setStatus(`⏳ 下载视频 ${i + 1}/${totalVideos}（文件较大，请稍候）...`);
-                const buffer = await gmFetch(url);
-                if (buffer && buffer.byteLength > 0) {
-                    zip.file(fileName, new Uint8Array(buffer)); // 关键修复：包装为 Uint8Array
-                    downloaded++;
-                    setStatus(`⏳ 下载中 ${downloaded}/${totalFiles}...`);
-                } else {
-                    throw new Error('Empty buffer');
-                }
-            } catch (e) {
-                console.warn('[XHS-DL] 视频下载失败:', url, e);
-                setStatus(`⚠️ 视频 ${i + 1} 下载失败，跳过`);
-            }
-        }
-
-        if (downloaded === 0) {
-            setStatus('❌ 所有文件下载失败');
-            return;
-        }
-
-        // 生成 ZIP 并触发下载
-        console.log('[XHS-DL] 开始生成 ZIP blob...');
-        setStatus('⏳ 正在压缩打包...');
-        const today = new Date();
-        const dateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
-        const zipName = `${media.noteId}_${sanitize(media.title)}_${dateStr}.zip`;
-
-        try {
-            const zipBlob = await zip.generateAsync({
-                type: 'blob',
-                compression: 'STORE' // 关键修复：仅存储不压缩，提高稳定性和速度
-            }, (meta) => {
-                const percent = Math.round(meta.percent);
-                if (percent % 20 === 0) console.log(`[XHS-DL] 压缩进度: ${percent}%`);
-                setStatus(`⏳ 压缩中 ${percent}%...`);
-            });
-
-            console.log('[XHS-DL] ZIP生成成功, 大小:', zipBlob.size);
-
-            const blobUrl = URL.createObjectURL(zipBlob);
-            const a = document.createElement('a');
-            a.href = blobUrl;
-            a.download = zipName;
-            a.style.display = 'none';
-            document.body.appendChild(a);
-            console.log('[XHS-DL] 触发模拟点击下载:', zipName);
-            a.click();
-
-            // 延时清理
-            setTimeout(() => {
-                document.body.removeChild(a);
-                URL.revokeObjectURL(blobUrl);
-                console.log('[XHS-DL] 清理临时资源');
-            }, 30000);
-
-            setStatus(`✅ 打包完成！${downloaded} 个文件 → ${zipName}`);
-        } catch (e) {
-            console.error('[XHS-DL] 压缩打包关键错误:', e);
-            setStatus(`❌ 打包失败: ${e.message || '未知错误'}`);
-            alert('打包过程出错，详细错误请看控制台。\n\n建议使用“逐个下载”或“复制链接”模式！');
-        }
-    }
-
     // ========== 替代下载方案 (逐个下载) ==========
     async function individualDownload() {
         const media = collectMediaInfo();
@@ -847,18 +709,6 @@
             console.log(allUrls);
         }
         document.body.removeChild(textArea);
-    }
-
-    // 动态加载 JSZip（备用，以防 @require 未生效）
-    function loadJSZip() {
-        return new Promise((resolve, reject) => {
-            if (window.JSZip || typeof JSZip !== 'undefined') return resolve(); // 已经有了
-            const s = document.createElement('script');
-            s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
-            s.onload = resolve;
-            s.onerror = () => reject(new Error('JSZip 加载失败'));
-            document.head.appendChild(s);
-        });
     }
 
     // ========== 初始化 ==========
