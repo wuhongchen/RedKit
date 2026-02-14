@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小红书笔记内容&评论下载器
 // @namespace    https://github.com/wuhongchen/RedKit
-// @version      1.4.1
+// @version      1.4.2
 // @description  在小红书笔记详情页一键提取帖子内容、评论，导出 CSV 表格，支持逐个或链接复制素材下载。
 // @author       whc
 // @match        https://www.xiaohongshu.com/
@@ -300,25 +300,35 @@
     const Storage = {
         getKey: () => 'xhs_saved_notes',
         getAll: () => {
-            const json = GM_getValue(Storage.getKey(), '[]');
-            try { return JSON.parse(json); } catch (e) { return []; }
+            try {
+                const json = GM_getValue(Storage.getKey(), '[]');
+                const res = JSON.parse(json);
+                return Array.isArray(res) ? res : [];
+            } catch (e) {
+                console.error('[XHS-DL] Storage Error:', e);
+                return [];
+            }
         },
         save: (noteData) => {
             if (!noteData || !noteData.noteId) return;
-            const list = Storage.getAll();
-            // 查重并更新
-            const idx = list.findIndex(n => n.noteId === noteData.noteId);
-            if (idx > -1) {
-                // 如果旧数据有评论而新数据没有，保留旧评论
-                if ((!noteData.comments || noteData.comments.length === 0) && list[idx].comments && list[idx].comments.length > 0) {
-                    noteData.comments = list[idx].comments;
+            try {
+                const list = Storage.getAll();
+                // 查重并更新
+                const idx = list.findIndex(n => n.noteId === noteData.noteId);
+                if (idx > -1) {
+                    // 如果旧数据有评论而新数据没有，保留旧评论
+                    if ((!noteData.comments || noteData.comments.length === 0) && list[idx].comments && list[idx].comments.length > 0) {
+                        noteData.comments = list[idx].comments;
+                    }
+                    list[idx] = noteData;
+                } else {
+                    list.push(noteData);
                 }
-                list[idx] = noteData;
-            } else {
-                list.push(noteData);
+                GM_setValue(Storage.getKey(), JSON.stringify(list));
+                updateStorageStatus();
+            } catch (e) {
+                console.error('[XHS-DL] Save Error:', e);
             }
-            GM_setValue(Storage.getKey(), JSON.stringify(list));
-            updateStorageStatus();
         },
         clear: () => {
             GM_deleteValue(Storage.getKey());
@@ -333,11 +343,14 @@
     };
 
     function updateStorageStatus() {
-        const count = Storage.getCount();
-        const exportBtn = document.getElementById('xdl-export-csv');
-        const clearBtn = document.getElementById('xdl-clear-data');
-        if (exportBtn) {
-            exportBtn.innerHTML = count > 0 ? `📊 导出全部数据 (${count})` : `📊 导出 CSV 表格`;
+        try {
+            const count = Storage.getCount();
+            const exportBtn = document.getElementById('xdl-export-csv');
+            if (exportBtn) {
+                exportBtn.innerText = count > 0 ? `📊 导出全部数据 (${count})` : `📊 导出 CSV 表格`;
+            }
+        } catch (e) {
+            console.error('[XHS-DL] UI Update Error:', e);
         }
     }
 
