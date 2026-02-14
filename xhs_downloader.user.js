@@ -1,9 +1,11 @@
 // ==UserScript==
 // @name         小红书笔记内容&评论下载器
 // @namespace    https://github.com/wuhongchen/RedKit
-// @version      1.2
+// @version      1.3
 // @description  在小红书笔记详情页一键提取帖子内容、评论，导出 CSV 表格，支持逐个或链接复制素材下载。
 // @author       whc
+// @match        https://www.xiaohongshu.com/
+// @match        https://www.xiaohongshu.com/?*
 // @match        https://www.xiaohongshu.com/explore*
 // @match        https://www.xiaohongshu.com/search_result*
 // @match        https://www.xiaohongshu.com/user/profile/*
