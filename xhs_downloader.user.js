@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小红书笔记内容&评论下载器
 // @namespace    https://github.com/wuhongchen/RedKit
-// @version      1.3
+// @version      1.4
 // @description  在小红书笔记详情页一键提取帖子内容、评论，导出 CSV 表格，支持逐个或链接复制素材下载。
 // @author       whc
 // @match        https://www.xiaohongshu.com/
@@ -145,6 +145,13 @@
     const isSearchPage = () => window.location.href.includes('/search_result');
     const isExplorePage = () => window.location.href.includes('/explore');
     const isProfilePage = () => window.location.href.includes('/user/profile');
+    const isHomePage = () => {
+        const href = window.location.href;
+        return href === 'https://www.xiaohongshu.com/' || 
+               href === 'https://www.xiaohongshu.com' ||
+               (href.includes('xiaohongshu.com') && !href.includes('/explore') && !href.includes('/search_result') && !href.includes('/user/profile'));
+    };
+    const isListPage = () => isSearchPage() || isProfilePage() || isHomePage();
 
     // ========== UI 模块 ==========
     function createUI() {
@@ -223,9 +230,9 @@
           </div>
           <button class="xdl-btn success"   id="xdl-copy-links"><span>📋 复制素材链接</span></button>
         </div>
-        <div id="xdl-search-tools" style="${(isSearchPage() || isProfilePage()) ? '' : 'display:none'}">
+        <div id="xdl-search-tools" style="${isListPage() ? '' : 'display:none'}">
           <button class="xdl-btn primary"   id="xdl-extract-search">
-            ${isProfilePage() ? '👤 提取笔记列表' : '🔍 抓取搜索结果'}
+            ${isProfilePage() ? '👤 提取笔记列表' : isHomePage() ? '🏠 提取首页笔记' : '🔍 抓取搜索结果'}
           </button>
           <button class="xdl-btn primary"   id="xdl-auto-extract">
             <span>🔄 逐个提取笔记</span>
@@ -252,9 +259,9 @@
                     const searchBtn = document.getElementById('xdl-extract-search');
 
                     if (detailTools) detailTools.style.display = isExplorePage() ? 'block' : 'none';
-                    if (searchTools) searchTools.style.display = (isSearchPage() || isProfilePage()) ? 'block' : 'none';
+                    if (searchTools) searchTools.style.display = isListPage() ? 'block' : 'none';
                     if (searchBtn) {
-                        searchBtn.innerHTML = isProfilePage() ? '👤 提取笔记列表' : '🔍 抓取搜索结果';
+                        searchBtn.innerHTML = isProfilePage() ? '👤 提取笔记列表' : isHomePage() ? '🏠 提取首页笔记' : '🔍 抓取搜索结果';
                     }
                 }
                 menu.classList.toggle('show');
@@ -536,14 +543,21 @@
 
     // ========== 搜索结果提取 ==========
     async function extractSearchResults() {
-        if (!isSearchPage() && !isProfilePage()) {
-            setStatus('❌ 请在搜索结果页或用户主页使用此功能');
+        if (!isListPage()) {
+            setStatus('❌ 请在首页、搜索结果页或用户主页使用此功能');
             return;
         }
 
         const isProfile = isProfilePage();
-        setStatus(`⏳ 正在提取${isProfile ? '主页笔记' : '搜索结果'}...`);
-        const cards = document.querySelectorAll('section.note-item');
+        const isHome = isHomePage();
+        setStatus(`⏳ 正在提取${isHome ? '首页' : isProfile ? '主页笔记' : '搜索结果'}...`);
+        
+        // 首页和其他页面可能使用不同的卡片选择器
+        let cards = document.querySelectorAll('section.note-item');
+        if (cards.length === 0) {
+            // 尝试其他可能的卡片选择器（首页）
+            cards = document.querySelectorAll('.note-card, .feed-item, [class*="note-item"], .item');
+        }
         let count = 0;
         const seenIds = new Set(state.searchResults.map(r => r.id));
 
@@ -580,14 +594,14 @@
 
     // ========== 自动逐个提取笔记 ==========
     async function autoExtractNotes() {
-        if (!isSearchPage() && !isProfilePage()) {
-            setStatus('❌ 请在搜索结果页或用户主页使用此功能');
+        if (!isListPage()) {
+            setStatus('❌ 请在首页、搜索结果页或用户主页使用此功能');
             return;
         }
 
         const cards = document.querySelectorAll('section.note-item');
         if (cards.length === 0) {
-            setStatus('❌ 未找到笔记列表，请确保在搜索结果页或用户主页');
+            setStatus('❌ 未找到笔记列表，请确保在首页、搜索结果页或用户主页');
             return;
         }
 
