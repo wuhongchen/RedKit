@@ -12,6 +12,10 @@
 // @icon         https://fe-video-qc.xhscdn.com/fe-platform/ed8fe781ce9e16c1bfac2cd962f0721edabe2e49.ico
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_deleteValue
+// @grant        GM_registerMenuCommand
 // ==/UserScript==
 
 (function () {
@@ -143,13 +147,19 @@
 
     // 判断所在页面
     const isSearchPage = () => window.location.href.includes('/search_result');
-    const isExplorePage = () => window.location.href.includes('/explore');
+    const isNoteDetailPage = () => {
+        // 只有 /explore/ 后跟 ID 的才是详情页，排除 /explore?channel_id=xx
+        return /\/explore\/[a-zA-Z0-9]+/.test(window.location.href) && !window.location.href.includes('/explore?');
+    };
     const isProfilePage = () => window.location.href.includes('/user/profile');
     const isHomePage = () => {
         const href = window.location.href;
-        return href === 'https://www.xiaohongshu.com/' || 
-               href === 'https://www.xiaohongshu.com' ||
-               (href.includes('xiaohongshu.com') && !href.includes('/explore') && !href.includes('/search_result') && !href.includes('/user/profile'));
+        // 如果是 /explore 但不是详情页，视为首页/列表页
+        if (href.includes('/explore') && !isNoteDetailPage()) return true;
+
+        return href === 'https://www.xiaohongshu.com/' ||
+            href === 'https://www.xiaohongshu.com' ||
+            (href.includes('xiaohongshu.com') && !href.includes('/explore') && !href.includes('/search_result') && !href.includes('/user/profile'));
     };
     const isListPage = () => isSearchPage() || isProfilePage() || isHomePage();
 
@@ -220,9 +230,9 @@
         #xdl-status.show { display: block; }
       </style>
 
-      <div id="xhs-dl-menu">
+        <div id="xhs-dl-menu">
         <h3>📥 笔记下载器</h3>
-        <div id="xdl-detail-tools" style="${isExplorePage() ? '' : 'display:none'}">
+        <div id="xdl-detail-tools" style="${isNoteDetailPage() ? '' : 'display:none'}">
           <button class="xdl-btn primary"   id="xdl-extract-note"><span>📝 提取笔记内容</span></button>
           <button class="xdl-btn primary"   id="xdl-extract-comments"><span>💬 提取全部评论</span></button>
           <div style="display: flex; gap: 5px;">
@@ -241,12 +251,18 @@
             <span>⏹ 停止提取</span>
           </button>
         </div>
-        <button class="xdl-btn success"   id="xdl-export-csv" style="margin-top:10px;">📊 导出 CSV 表格</button>
+        <div style="display:flex; gap:5px; margin-top:10px;">
+            <button class="xdl-btn success" id="xdl-export-csv" style="flex:2">📊 导出 CSV</button>
+            <button class="xdl-btn secondary" id="xdl-clear-data" style="flex:1" title="清空缓存">🗑</button>
+        </div>
         <div id="xdl-status"></div>
       </div>
       <button id="xhs-dl-toggle">笔记<br>下载</button>
     `;
         document.body.appendChild(panel);
+
+        // 初始化更新数据计数
+        updateStorageStatus();
 
         // 面板展开/收起
         document.getElementById('xhs-dl-toggle').onclick = () => {
@@ -258,7 +274,7 @@
                     const searchTools = document.getElementById('xdl-search-tools');
                     const searchBtn = document.getElementById('xdl-extract-search');
 
-                    if (detailTools) detailTools.style.display = isExplorePage() ? 'block' : 'none';
+                    if (detailTools) detailTools.style.display = isNoteDetailPage() ? 'block' : 'none';
                     if (searchTools) searchTools.style.display = isListPage() ? 'block' : 'none';
                     if (searchBtn) {
                         searchBtn.innerHTML = isProfilePage() ? '👤 提取笔记列表' : isHomePage() ? '🏠 提取首页笔记' : '🔍 抓取搜索结果';
@@ -275,8 +291,61 @@
         if (document.getElementById('xdl-download-direct')) document.getElementById('xdl-download-direct').onclick = individualDownload;
         if (document.getElementById('xdl-copy-links')) document.getElementById('xdl-copy-links').onclick = copyMediaUrls;
         document.getElementById('xdl-export-csv').onclick = exportCSV;
+        document.getElementById('xdl-clear-data').onclick = clearStoredData;
         if (document.getElementById('xdl-auto-extract')) document.getElementById('xdl-auto-extract').onclick = autoExtractNotes;
         if (document.getElementById('xdl-stop-auto')) document.getElementById('xdl-stop-auto').onclick = stopAutoExtract;
+    }
+
+    // ========== 数据持久化存储 ==========
+    const Storage = {
+        getKey: () => 'xhs_saved_notes',
+        getAll: () => {
+            const json = GM_getValue(Storage.getKey(), '[]');
+            try { return JSON.parse(json); } catch (e) { return []; }
+        },
+        save: (noteData) => {
+            if (!noteData || !noteData.noteId) return;
+            const list = Storage.getAll();
+            // 查重并更新
+            const idx = list.findIndex(n => n.noteId === noteData.noteId);
+            if (idx > -1) {
+                // 如果旧数据有评论而新数据没有，保留旧评论
+                if ((!noteData.comments || noteData.comments.length === 0) && list[idx].comments && list[idx].comments.length > 0) {
+                    noteData.comments = list[idx].comments;
+                }
+                list[idx] = noteData;
+            } else {
+                list.push(noteData);
+            }
+            GM_setValue(Storage.getKey(), JSON.stringify(list));
+            updateStorageStatus();
+        },
+        clear: () => {
+            GM_deleteValue(Storage.getKey());
+            state.autoExtractedNotes = [];
+            state.noteData = null;
+            state.comments = [];
+            updateStorageStatus();
+        },
+        getCount: () => {
+            return Storage.getAll().length;
+        }
+    };
+
+    function updateStorageStatus() {
+        const count = Storage.getCount();
+        const exportBtn = document.getElementById('xdl-export-csv');
+        const clearBtn = document.getElementById('xdl-clear-data');
+        if (exportBtn) {
+            exportBtn.innerHTML = count > 0 ? `📊 导出全部数据 (${count})` : `📊 导出 CSV 表格`;
+        }
+    }
+
+    function clearStoredData() {
+        if (confirm('确定要清空所有已提取的缓存数据吗？')) {
+            Storage.clear();
+            setStatus('🗑 数据已清空');
+        }
     }
 
     // 状态更新
@@ -403,6 +472,9 @@
         setStatus(
             `✅ 笔记提取完成！\n📝 标题：${title.substring(0, 30)}...\n🖼️ 图片：${images.length} 张\n❤️ 点赞：${likes} | ⭐ 收藏：${collects}`
         );
+
+        // 自动保存
+        Storage.save(state.noteData);
     }
 
     // ========== 评论批量提取 ==========
@@ -539,6 +611,12 @@
         if (exportBtn) exportBtn.disabled = false;
 
         setStatus(`✅ 评论提取完成！共 ${state.comments.length} 条评论`);
+
+        // 更新并保存数据
+        if (state.noteData) {
+            state.noteData.comments = state.comments;
+            Storage.save(state.noteData);
+        }
     }
 
     // ========== 搜索结果提取 ==========
@@ -551,7 +629,7 @@
         const isProfile = isProfilePage();
         const isHome = isHomePage();
         setStatus(`⏳ 正在提取${isHome ? '首页' : isProfile ? '主页笔记' : '搜索结果'}...`);
-        
+
         // 首页和其他页面可能使用不同的卡片选择器
         let cards = document.querySelectorAll('section.note-item');
         if (cards.length === 0) {
@@ -567,6 +645,7 @@
             const nameEl = authorEl ? (authorEl.querySelector('.name') || authorEl.querySelector('div div')) : null;
             const likeEl = card.querySelector('.count');
             const linkEl = card.querySelector('a.cover');
+            const url = linkEl ? linkEl.href : '';
 
             const title = titleEl ? titleEl.innerText.trim() : '';
             const author = nameEl ? nameEl.innerText.trim() : '';
@@ -645,7 +724,7 @@
             const progress = Math.round(((i + 1) / cards.length) * 100);
             if (btn) btn.style.setProperty('--progress', `${progress}%`);
 
-            setStatus(`⏳ 正在提取第 ${i+1}/${cards.length} 个: ${title.substring(0,15)}...`);
+            setStatus(`⏳ 正在提取第 ${i + 1}/${cards.length} 个: ${title.substring(0, 15)}...`);
 
             linkEl.click();
 
@@ -658,7 +737,7 @@
             }
 
             if (!document.querySelector('#noteContainer')) {
-                console.warn(`[XHS-DL] 第${i+1}个笔记加载失败，跳过`);
+                console.warn(`[XHS-DL] 第${i + 1}个笔记加载失败，跳过`);
                 window.history.back();
                 await sleep(2000);
                 continue;
@@ -668,7 +747,9 @@
 
             await extractComments();
 
-            state.autoExtractedNotes.push({
+
+
+            const noteObj = {
                 index: i + 1,
                 noteId: state.noteData?.noteId || noteId,
                 title: state.noteData?.title || title,
@@ -683,7 +764,11 @@
                 comments: [...state.comments],
                 url: noteUrl,
                 extractedAt: new Date().toISOString()
-            });
+            };
+
+            state.autoExtractedNotes.push(noteObj);
+            // 实时保存
+            Storage.save(noteObj);
 
             window.history.back();
 
@@ -732,280 +817,307 @@
 
     // ========== 导出 CSV 表格 ==========
     function exportCSV() {
-        if (!state.noteData && state.comments.length === 0 && state.searchResults.length === 0 && state.autoExtractedNotes.length === 0) {
-            setStatus('❌ 没有数据可导出，请先提取笔记内容、评论或搜索结果');
+        const storedNotes = Storage.getAll();
+
+        if (storedNotes.length === 0 && !state.noteData && state.searchResults.length === 0) {
+            setStatus('❌ 没有数据可导出，请先提取');
             return;
         }
 
         const rows = [];
-        const note = state.noteData || {};
+        const isBatchExport = storedNotes.length > 0;
 
-        if (state.noteData || state.comments.length > 0) {
-            // ---- 笔记信息区 ----
-            rows.push(buildCSVRow(['=== 笔记详情信息 ===', '', '', '', '']));
-            rows.push(buildCSVRow(['笔记ID', note.noteId || '']));
-            rows.push(buildCSVRow(['标题', note.title || '']));
-            rows.push(buildCSVRow(['作者', note.author || '']));
-            rows.push(buildCSVRow(['发布日期', note.publishDate || '']));
-            rows.push(buildCSVRow(['IP属地', note.ipLocation || '']));
-            rows.push(buildCSVRow(['点赞', note.likes || '', '收藏', note.collects || '', '评论数', note.commentsCount || '']));
-            rows.push(buildCSVRow(['正文', note.desc || '']));
-            rows.push(buildCSVRow(['标签', (note.tags || []).join(' ')]));
-            rows.push(buildCSVRow(['图片链接', (note.images || []).join(' | ')]));
-            if (note.video) rows.push(buildCSVRow(['视频链接', note.video]));
-            rows.push(buildCSVRow(['原文链接', note.url || '']));
-            rows.push(buildCSVRow(['提取时间', note.extractedAt || new Date().toISOString()]));
-            rows.push(''); // 空行分隔
+        // 如果有缓存数据，优先导出缓存数据（包含当前提取的）
+        const notesToExport = isBatchExport ? storedNotes : (state.noteData ? [state.noteData] : []);
+
+        if (notesToExport.length > 0) {
+            notesToExport.forEach((note, index) => {
+                if (index > 0) rows.push(''); // 笔记间空行
+                // ---- 笔记信息区 ----
+                rows.push(buildCSVRow([`=== 笔记 ${index + 1}: ${note.title.substring(0, 15)}... ===`, '', '', '', '']));
+                rows.push(buildCSVRow(['笔记ID', note.noteId || '']));
+                rows.push(buildCSVRow(['标题', note.title || '']));
+                rows.push(buildCSVRow(['作者', note.author || '']));
+                rows.push(buildCSVRow(['发布日期', note.publishDate || '']));
+                rows.push(buildCSVRow(['IP属地', note.ipLocation || '']));
+                rows.push(buildCSVRow(['点赞', note.likes || '', '收藏', note.collects || '', '评论数', note.commentsCount || '']));
+                rows.push(buildCSVRow(['正文', note.desc || '']));
+                rows.push(buildCSVRow(['标签', (note.tags || []).join(' ')]));
+                rows.push(buildCSVRow(['图片链接', (note.images || []).join(' | ')]));
+                if (note.video) rows.push(buildCSVRow(['视频链接', note.video]));
+                rows.push(buildCSVRow(['原文链接', note.url || '']));
+                rows.push(buildCSVRow(['提取时间', note.extractedAt || new Date().toISOString()]));
+
+                // ---- 评论明细区 ----
+                if (note.comments && note.comments.length > 0) {
+                    rows.push(buildCSVRow(['>>> 评论列表', '', '', '', '']));
+                    rows.push(buildCSVRow(['序号', '用户', '评论内容', '评论时间', '点赞数', '类型']));
+
+                    let cIdx = 1;
+                    note.comments.forEach((c) => {
+                        rows.push(buildCSVRow([cIdx++, c.user, c.content, c.date, c.likes || '', '主评论']));
+                        if (c.replies && c.replies.length > 0) {
+                            c.replies.forEach((r) => {
+                                rows.push(buildCSVRow([cIdx++, r.user, r.content, r.date, '', '↳ 回复']));
+                            });
+                        }
+                    });
+                    rows.push(buildCSVRow(['本篇评论数', note.comments.length]));
+                } else {
+                    rows.push(buildCSVRow(['(无评论数据)']));
+                }
+            });
         }
+        // ---- 笔记信息区 ----
+        rows.push(buildCSVRow(['=== 笔记详情信息 ===', '', '', '', '']));
+        rows.push(buildCSVRow(['笔记ID', note.noteId || '']));
+        rows.push(buildCSVRow(['标题', note.title || '']));
+        rows.push(buildCSVRow(['作者', note.author || '']));
+        rows.push(buildCSVRow(['发布日期', note.publishDate || '']));
+        rows.push(buildCSVRow(['IP属地', note.ipLocation || '']));
+        rows.push(buildCSVRow(['点赞', note.likes || '', '收藏', note.collects || '', '评论数', note.commentsCount || '']));
+        rows.push(buildCSVRow(['正文', note.desc || '']));
+        rows.push(buildCSVRow(['标签', (note.tags || []).join(' ')]));
+        rows.push(buildCSVRow(['图片链接', (note.images || []).join(' | ')]));
+        if (note.video) rows.push(buildCSVRow(['视频链接', note.video]));
+        rows.push(buildCSVRow(['原文链接', note.url || '']));
+        rows.push(buildCSVRow(['提取时间', note.extractedAt || new Date().toISOString()]));
+        rows.push(''); // 空行分隔
+    }
 
-        // ---- 评论明细区 ----
-        rows.push(buildCSVRow(['=== 评论明细 ===', '', '', '', '']));
-        rows.push(buildCSVRow(['序号', '用户', '评论内容', '评论时间', '点赞数', '类型']));
+    // ---- 评论明细区 ----
+    rows.push(buildCSVRow(['=== 评论明细 ===', '', '', '', '']));
+    rows.push(buildCSVRow(['序号', '用户', '评论内容', '评论时间', '点赞数', '类型']));
 
-        let idx = 1;
-        state.comments.forEach((c) => {
-            rows.push(buildCSVRow([idx++, c.user, c.content, c.date, c.likes || '', '主评论']));
-            // 子评论/回复
-            if (c.replies && c.replies.length > 0) {
-                c.replies.forEach((r) => {
-                    rows.push(buildCSVRow([idx++, r.user, r.content, r.date, '', '↳ 回复']));
+    let idx = 1;
+    state.comments.forEach((c) => {
+        rows.push(buildCSVRow([idx++, c.user, c.content, c.date, c.likes || '', '主评论']));
+        // 子评论/回复
+        if (c.replies && c.replies.length > 0) {
+            c.replies.forEach((r) => {
+                rows.push(buildCSVRow([idx++, r.user, r.content, r.date, '', '↳ 回复']));
+            });
+        }
+    });
+
+    // 添加统计行
+    rows.push('');
+    rows.push(buildCSVRow(['合计评论数', state.comments.length]));
+
+    // ---- 搜索结果区 (独立导出) ----
+    if (state.searchResults.length > 0) {
+        rows.push('');
+        rows.push(buildCSVRow(['=== 搜索/列表结果 ===', '', '', '', '', '']));
+        rows.push(buildCSVRow(['序号', '笔记ID', '标题', '作者', '点赞数', '链接']));
+        state.searchResults.forEach((item, i) => {
+            rows.push(buildCSVRow([i + 1, item.id, item.title, item.author, item.likes, item.url]));
+        });
+    }
+
+    rows.push('');
+    rows.push(buildCSVRow(['导出时间', new Date().toISOString()]));
+
+    const fileName = isBatchExport
+        ? `xhs_batch_export_${Storage.getCount()}_notes_${Date.now()}.csv`
+        : state.searchResults.length > 0
+            ? `xhs_search_list_${Date.now()}.csv`
+            : `xhs_export_${Date.now()}.csv`;
+
+    // BOM + CSV 内容（确保 Excel 正确识别 UTF-8）
+    const BOM = '\uFEFF';
+    const csvContent = BOM + rows.join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    setStatus(`✅ 已导出表格 ${fileName}（共 ${state.comments.length} 条评论）`);
+}
+
+// ========== 素材信息提取（独立于文案提取） ==========
+// ========== 笔记内容提取 ==========
+function collectMediaInfo() {
+    const container = document.querySelector('#noteContainer');
+    if (!container) return null;
+
+    // 笔记ID
+    const urlMatch = window.location.href.match(/\/(?:explore|profile\/[a-zA-Z0-9]+)\/([a-zA-Z0-9]+)/);
+    const noteId = urlMatch ? urlMatch[1] : 'unknown';
+
+    // 标题
+    const titleEl = document.querySelector('#detail-title');
+    const title = titleEl ? titleEl.innerText.trim() : '';
+
+    // 图片
+    const imgEls = document.querySelectorAll(
+        '.media-container .swiper-slide img, .note-content img, #noteContainer .note-slider-img'
+    );
+    const images = Array.from(imgEls)
+        .map((img) => {
+            let src = img.getAttribute('data-origin-src')
+                || img.getAttribute('data-src')
+                || img.src || '';
+            if (!src) return '';
+            // 统一协议
+            if (src.startsWith('//')) src = 'https:' + src;
+            // 如果是 HTTP 且不是 localhost，尝试 HTTPS（顺应浏览器 Mixed Content 策略）
+            if (src.startsWith('http://') && !src.includes('127.0.0.1')) {
+                src = src.replace('http://', 'https://');
+            }
+            return src;
+        })
+        .filter((s) => s && (s.includes('xhscdn.com') || s.includes('sns-img') || s.includes('sns-webpic')))
+        .filter((v, i, a) => a.indexOf(v) === i);
+
+    // 视频检测增强：尝试从 el.src 获取，若为 blob 则尝试从 unsafeWindow 提取
+    const videos = [];
+    document.querySelectorAll('.media-container video, .media-container source, #noteContainer video').forEach((el) => {
+        let src = el.src || el.currentSrc || '';
+        if (src && !src.startsWith('blob:') && !videos.includes(src)) {
+            if (src.startsWith('//')) src = 'https:' + src;
+            if (src.startsWith('http://') && !src.includes('127.0.0.1')) {
+                src = src.replace('http://', 'https://');
+            }
+            videos.push(src);
+        }
+    });
+
+    // 如果 DOM 中没找到直链，尝试从页面深度状态中提取 (针对使用了 MSE 播放器的视频)
+    try {
+        const state = typeof unsafeWindow !== 'undefined' ? unsafeWindow.__INITIAL_STATE__ : null;
+        if (state && state.note && state.note.noteDetailMap) {
+            const detail = state.note.noteDetailMap[noteId] || Object.values(state.note.noteDetailMap)[0];
+            if (detail && detail.note && detail.note.video) {
+                const stream = detail.note.video.media.stream;
+                // 尝试获取 h264 或 h265 最高的清晰度
+                const videoUrls = [
+                    ...(stream.h264 || []),
+                    ...(stream.h265 || []),
+                    ...(stream.av1 || [])
+                ].map(v => v.masterUrl).filter(Boolean);
+
+                videoUrls.forEach(url => {
+                    let s = url;
+                    if (s.startsWith('//')) s = 'https:' + s;
+                    if (!videos.includes(s)) videos.push(s);
                 });
             }
-        });
-
-        // 添加统计行
-        rows.push('');
-        rows.push(buildCSVRow(['合计评论数', state.comments.length]));
-
-        // ---- 搜索结果区 ----
-        if (state.searchResults.length > 0) {
-            rows.push('');
-            rows.push(buildCSVRow(['=== 搜索结果列表 ===', '', '', '', '', '']));
-            rows.push(buildCSVRow(['序号', '笔记ID', '标题', '作者', '点赞数', '链接']));
-            state.searchResults.forEach((item, i) => {
-                rows.push(buildCSVRow([i + 1, item.id, item.title, item.author, item.likes, item.url]));
-            });
         }
-
-        // ---- 自动提取笔记列表 ----
-        if (state.autoExtractedNotes.length > 0) {
-            rows.push('');
-            rows.push(buildCSVRow(['=== 自动提取笔记列表 ===', '', '', '', '', '', '', '']));
-            rows.push(buildCSVRow(['序号', '笔记ID', '标题', '作者', '点赞', '收藏', '评论数', '链接']));
-            state.autoExtractedNotes.forEach((item) => {
-                rows.push(buildCSVRow([
-                    item.index, item.noteId, item.title, item.author, 
-                    item.likes, item.collects, item.commentsCount, item.url
-                ]));
-            });
-            rows.push('');
-            rows.push(buildCSVRow(['自动提取合计', state.autoExtractedNotes.length, '个笔记']));
-        }
-
-        rows.push('');
-        rows.push(buildCSVRow(['导出时间', new Date().toISOString()]));
-
-        const fileName = note.noteId
-            ? `xhs_${note.noteId}_${(note.title || '').substring(0, 20).replace(/[\\/:*?"<>|]/g, '_')}.csv`
-            : state.autoExtractedNotes.length > 0
-                ? `xhs_auto_export_${Date.now()}.csv`
-                : `xhs_search_export_${Date.now()}.csv`;
-
-        // BOM + CSV 内容（确保 Excel 正确识别 UTF-8）
-        const BOM = '\uFEFF';
-        const csvContent = BOM + rows.join('\r\n');
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        setStatus(`✅ 已导出表格 ${fileName}（共 ${state.comments.length} 条评论）`);
+    } catch (e) {
+        console.warn('[XHS-DL] 尝试从状态抓取视频链接失败:', e);
     }
 
-    // ========== 素材信息提取（独立于文案提取） ==========
-    // ========== 笔记内容提取 ==========
-    function collectMediaInfo() {
-        const container = document.querySelector('#noteContainer');
-        if (!container) return null;
+    // 日期
+    const dateEl = document.querySelector('#noteContainer .date, #noteContainer .bottom-container .date');
+    const publishDate = dateEl ? dateEl.innerText.trim().replace(/[\s:]/g, '').substring(0, 10) : '';
 
-        // 笔记ID
-        const urlMatch = window.location.href.match(/\/(?:explore|profile\/[a-zA-Z0-9]+)\/([a-zA-Z0-9]+)/);
-        const noteId = urlMatch ? urlMatch[1] : 'unknown';
+    return { noteId, title, images, videos, publishDate };
+}
 
-        // 标题
-        const titleEl = document.querySelector('#detail-title');
-        const title = titleEl ? titleEl.innerText.trim() : '';
+// 清理文件名中的特殊字符
+function sanitize(str, maxLen = 30) {
+    return (str || '').replace(/[\\/:*?"<>|\n\r]/g, '_').substring(0, maxLen).trim() || 'untitled';
+}
 
-        // 图片
-        const imgEls = document.querySelectorAll(
-            '.media-container .swiper-slide img, .note-content img, #noteContainer .note-slider-img'
-        );
-        const images = Array.from(imgEls)
-            .map((img) => {
-                let src = img.getAttribute('data-origin-src')
-                    || img.getAttribute('data-src')
-                    || img.src || '';
-                if (!src) return '';
-                // 统一协议
-                if (src.startsWith('//')) src = 'https:' + src;
-                // 如果是 HTTP 且不是 localhost，尝试 HTTPS（顺应浏览器 Mixed Content 策略）
-                if (src.startsWith('http://') && !src.includes('127.0.0.1')) {
-                    src = src.replace('http://', 'https://');
+// ========== 打包下载素材（图片 + 视频 → ZIP） ==========
+// ========== 打包下载素材（图片 + 视频 → ZIP） ==========
+// ========== 替代下载方案 (逐个下载) ==========
+async function individualDownload() {
+    const media = collectMediaInfo();
+    if (!media || (media.images.length === 0 && media.videos.length === 0)) {
+        setStatus('❌ 未找到可下载的素材');
+        return;
+    }
+
+    setStatus(`⏳ 准备逐个下载 ${media.images.length + media.videos.length} 个文件...`);
+
+    let count = 0;
+    const total = media.images.length + media.videos.length;
+
+    // 下载图片
+    for (let i = 0; i < media.images.length; i++) {
+        const url = media.images[i];
+        const ext = url.includes('.png') ? 'png' : 'jpg';
+        const fileName = `${media.noteId}_img_${i + 1}.${ext}`;
+        GM_download({
+            url: url,
+            name: fileName,
+            onload: () => console.log('[XHS-DL] 下载成功:', fileName),
+            onerror: (err) => console.error('[XHS-DL] 下载失败:', fileName, err)
+        });
+        count++;
+        setStatus(`📥 正在触发下载 ${count}/${total}...`);
+        await sleep(500); // 间隔一下，防止浏览器弹窗频率限制
+    }
+
+    // 下载视频
+    for (let i = 0; i < media.videos.length; i++) {
+        let url = media.videos[i];
+        const fileName = `${media.noteId}_video_${i + 1}.mp4`;
+
+        console.log('[XHS-DL] 尝试下载视频:', url);
+        GM_download({
+            url: url,
+            name: fileName,
+            onload: () => {
+                console.log('[XHS-DL] 视频下载成功:', fileName);
+                setStatus(`✅ 视频下载成功: ${fileName}`);
+            },
+            onerror: (err) => {
+                console.error('[XHS-DL] 视频下载异常:', err, url);
+                setStatus(`❌ 视频下载失败: ${err.error || '未知原因'}`);
+                // 如果 GM_download 失败，尝试在新标签页打开链接让用户手动下载
+                if (confirm(`视频下载被拦截或失败，是否尝试在浏览器新标签页手动打开并保存？\n\n错误：${err.error}`)) {
+                    window.open(url, '_blank');
                 }
-                return src;
-            })
-            .filter((s) => s && (s.includes('xhscdn.com') || s.includes('sns-img') || s.includes('sns-webpic')))
-            .filter((v, i, a) => a.indexOf(v) === i);
-
-        // 视频检测增强：尝试从 el.src 获取，若为 blob 则尝试从 unsafeWindow 提取
-        const videos = [];
-        document.querySelectorAll('.media-container video, .media-container source, #noteContainer video').forEach((el) => {
-            let src = el.src || el.currentSrc || '';
-            if (src && !src.startsWith('blob:') && !videos.includes(src)) {
-                if (src.startsWith('//')) src = 'https:' + src;
-                if (src.startsWith('http://') && !src.includes('127.0.0.1')) {
-                    src = src.replace('http://', 'https://');
-                }
-                videos.push(src);
             }
         });
-
-        // 如果 DOM 中没找到直链，尝试从页面深度状态中提取 (针对使用了 MSE 播放器的视频)
-        try {
-            const state = typeof unsafeWindow !== 'undefined' ? unsafeWindow.__INITIAL_STATE__ : null;
-            if (state && state.note && state.note.noteDetailMap) {
-                const detail = state.note.noteDetailMap[noteId] || Object.values(state.note.noteDetailMap)[0];
-                if (detail && detail.note && detail.note.video) {
-                    const stream = detail.note.video.media.stream;
-                    // 尝试获取 h264 或 h265 最高的清晰度
-                    const videoUrls = [
-                        ...(stream.h264 || []),
-                        ...(stream.h265 || []),
-                        ...(stream.av1 || [])
-                    ].map(v => v.masterUrl).filter(Boolean);
-
-                    videoUrls.forEach(url => {
-                        let s = url;
-                        if (s.startsWith('//')) s = 'https:' + s;
-                        if (!videos.includes(s)) videos.push(s);
-                    });
-                }
-            }
-        } catch (e) {
-            console.warn('[XHS-DL] 尝试从状态抓取视频链接失败:', e);
-        }
-
-        // 日期
-        const dateEl = document.querySelector('#noteContainer .date, #noteContainer .bottom-container .date');
-        const publishDate = dateEl ? dateEl.innerText.trim().replace(/[\s:]/g, '').substring(0, 10) : '';
-
-        return { noteId, title, images, videos, publishDate };
+        count++;
+        setStatus(`📥 正在触发下载 ${count}/${total}...`);
+        await sleep(1000); // 增加间隔，给浏览器更长的响应时间
     }
 
-    // 清理文件名中的特殊字符
-    function sanitize(str, maxLen = 30) {
-        return (str || '').replace(/[\\/:*?"<>|\n\r]/g, '_').substring(0, maxLen).trim() || 'untitled';
+    setStatus(`✅ 已触发 ${count} 个文件的下载请求`);
+}
+
+// ========== 替代下载方案 (复制链接) ==========
+function copyMediaUrls() {
+    const media = collectMediaInfo();
+    if (!media || (media.images.length === 0 && media.videos.length === 0)) {
+        setStatus('❌ 未找到素材链接');
+        return;
     }
 
-    // ========== 打包下载素材（图片 + 视频 → ZIP） ==========
-    // ========== 打包下载素材（图片 + 视频 → ZIP） ==========
-    // ========== 替代下载方案 (逐个下载) ==========
-    async function individualDownload() {
-        const media = collectMediaInfo();
-        if (!media || (media.images.length === 0 && media.videos.length === 0)) {
-            setStatus('❌ 未找到可下载的素材');
-            return;
-        }
+    const allUrls = [...media.images, ...media.videos].join('\n');
 
-        setStatus(`⏳ 准备逐个下载 ${media.images.length + media.videos.length} 个文件...`);
-
-        let count = 0;
-        const total = media.images.length + media.videos.length;
-
-        // 下载图片
-        for (let i = 0; i < media.images.length; i++) {
-            const url = media.images[i];
-            const ext = url.includes('.png') ? 'png' : 'jpg';
-            const fileName = `${media.noteId}_img_${i + 1}.${ext}`;
-            GM_download({
-                url: url,
-                name: fileName,
-                onload: () => console.log('[XHS-DL] 下载成功:', fileName),
-                onerror: (err) => console.error('[XHS-DL] 下载失败:', fileName, err)
-            });
-            count++;
-            setStatus(`📥 正在触发下载 ${count}/${total}...`);
-            await sleep(500); // 间隔一下，防止浏览器弹窗频率限制
-        }
-
-        // 下载视频
-        for (let i = 0; i < media.videos.length; i++) {
-            let url = media.videos[i];
-            const fileName = `${media.noteId}_video_${i + 1}.mp4`;
-
-            console.log('[XHS-DL] 尝试下载视频:', url);
-            GM_download({
-                url: url,
-                name: fileName,
-                onload: () => {
-                    console.log('[XHS-DL] 视频下载成功:', fileName);
-                    setStatus(`✅ 视频下载成功: ${fileName}`);
-                },
-                onerror: (err) => {
-                    console.error('[XHS-DL] 视频下载异常:', err, url);
-                    setStatus(`❌ 视频下载失败: ${err.error || '未知原因'}`);
-                    // 如果 GM_download 失败，尝试在新标签页打开链接让用户手动下载
-                    if (confirm(`视频下载被拦截或失败，是否尝试在浏览器新标签页手动打开并保存？\n\n错误：${err.error}`)) {
-                        window.open(url, '_blank');
-                    }
-                }
-            });
-            count++;
-            setStatus(`📥 正在触发下载 ${count}/${total}...`);
-            await sleep(1000); // 增加间隔，给浏览器更长的响应时间
-        }
-
-        setStatus(`✅ 已触发 ${count} 个文件的下载请求`);
+    // 使用创建文本域的方式复制，兼容性更好
+    const textArea = document.createElement('textarea');
+    textArea.value = allUrls;
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+        document.execCommand('copy');
+        setStatus(`✅ 已成功复制 ${media.images.length + media.videos.length} 个链接`);
+        alert('素材链接已复制到剪贴板，您可以粘贴到 IDM 或其他下载工具中。');
+    } catch (err) {
+        console.error('复制失败:', err);
+        setStatus('❌ 复制链接失败，请手动查看控制台');
+        console.log('--- 素材链接列表 ---');
+        console.log(allUrls);
     }
+    document.body.removeChild(textArea);
+}
 
-    // ========== 替代下载方案 (复制链接) ==========
-    function copyMediaUrls() {
-        const media = collectMediaInfo();
-        if (!media || (media.images.length === 0 && media.videos.length === 0)) {
-            setStatus('❌ 未找到素材链接');
-            return;
-        }
-
-        const allUrls = [...media.images, ...media.videos].join('\n');
-
-        // 使用创建文本域的方式复制，兼容性更好
-        const textArea = document.createElement('textarea');
-        textArea.value = allUrls;
-        document.body.appendChild(textArea);
-        textArea.select();
-        try {
-            document.execCommand('copy');
-            setStatus(`✅ 已成功复制 ${media.images.length + media.videos.length} 个链接`);
-            alert('素材链接已复制到剪贴板，您可以粘贴到 IDM 或其他下载工具中。');
-        } catch (err) {
-            console.error('复制失败:', err);
-            setStatus('❌ 复制链接失败，请手动查看控制台');
-            console.log('--- 素材链接列表 ---');
-            console.log(allUrls);
-        }
-        document.body.removeChild(textArea);
-    }
-
-    // ========== 初始化 ==========
-    // 等待页面加载完成后注入UI
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', createUI);
-    } else {
-        createUI();
-    }
-})();
+// ========== 初始化 ==========
+// 等待页面加载完成后注入UI
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', createUI);
+} else {
+    createUI();
+}
+}) ();
