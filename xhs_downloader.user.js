@@ -134,6 +134,9 @@
         comments: [],     // 当前提取的评论列表
         searchResults: [], // 搜索页提取的笔记列表
         isExtracting: false,
+        autoExtractedNotes: [], // 自动提取的笔记列表
+        isAutoExtracting: false, // 标记是否正在自动提取
+        autoExtractIndex: 0, // 当前提取到的索引
     };
 
     // 判断所在页面
@@ -222,6 +225,12 @@
           <button class="xdl-btn primary"   id="xdl-extract-search">
             ${isProfilePage() ? '👤 提取笔记列表' : '🔍 抓取搜索结果'}
           </button>
+          <button class="xdl-btn primary"   id="xdl-auto-extract">
+            <span>🔄 逐个提取笔记</span>
+          </button>
+          <button class="xdl-btn secondary" id="xdl-stop-auto" style="display:none">
+            <span>⏹ 停止提取</span>
+          </button>
         </div>
         <button class="xdl-btn success"   id="xdl-export-csv" style="margin-top:10px;">📊 导出 CSV 表格</button>
         <div id="xdl-status"></div>
@@ -257,6 +266,8 @@
         if (document.getElementById('xdl-download-direct')) document.getElementById('xdl-download-direct').onclick = individualDownload;
         if (document.getElementById('xdl-copy-links')) document.getElementById('xdl-copy-links').onclick = copyMediaUrls;
         document.getElementById('xdl-export-csv').onclick = exportCSV;
+        if (document.getElementById('xdl-auto-extract')) document.getElementById('xdl-auto-extract').onclick = autoExtractNotes;
+        if (document.getElementById('xdl-stop-auto')) document.getElementById('xdl-stop-auto').onclick = stopAutoExtract;
     }
 
     // 状态更新
@@ -565,6 +576,130 @@
         setStatus(`✅ 提取完成！本次新增 ${count} 条，总计 ${state.searchResults.length} 条笔记`);
     }
 
+    // ========== 自动逐个提取笔记 ==========
+    async function autoExtractNotes() {
+        if (!isSearchPage() && !isProfilePage()) {
+            setStatus('❌ 请在搜索结果页或用户主页使用此功能');
+            return;
+        }
+
+        const cards = document.querySelectorAll('section.note-item');
+        if (cards.length === 0) {
+            setStatus('❌ 未找到笔记列表，请确保在搜索结果页或用户主页');
+            return;
+        }
+
+        if (state.isAutoExtracting) {
+            setStatus('⚠️ 正在提取中，请先点击停止按钮');
+            return;
+        }
+
+        state.isAutoExtracting = true;
+        state.autoExtractedNotes = [];
+        state.autoExtractIndex = 0;
+
+        document.getElementById('xdl-auto-extract').style.display = 'none';
+        document.getElementById('xdl-stop-auto').style.display = 'block';
+
+        setStatus(`⏳ 开始自动提取，共 ${cards.length} 个笔记...`);
+
+        const btn = document.getElementById('xdl-auto-extract');
+        if (btn) btn.classList.add('loading');
+
+        for (let i = 0; i < cards.length; i++) {
+            if (!state.isAutoExtracting) break;
+
+            state.autoExtractIndex = i;
+            const card = cards[i];
+
+            const linkEl = card.querySelector('a.cover');
+            if (!linkEl) continue;
+
+            const noteUrl = linkEl.href;
+            const noteIdMatch = noteUrl.match(/\/explore\/([a-zA-Z0-9]+)/);
+            if (!noteIdMatch) continue;
+
+            const noteId = noteIdMatch[1];
+
+            const titleEl = card.querySelector('.title');
+            const likeEl = card.querySelector('.count');
+            const title = titleEl ? titleEl.innerText.trim() : '';
+            const likes = likeEl ? likeEl.innerText.trim() : '0';
+
+            const progress = Math.round(((i + 1) / cards.length) * 100);
+            if (btn) btn.style.setProperty('--progress', `${progress}%`);
+
+            setStatus(`⏳ 正在提取第 ${i+1}/${cards.length} 个: ${title.substring(0,15)}...`);
+
+            linkEl.click();
+
+            await sleep(3000);
+
+            let waitCount = 0;
+            while (!document.querySelector('#noteContainer') && waitCount < 10) {
+                await sleep(500);
+                waitCount++;
+            }
+
+            if (!document.querySelector('#noteContainer')) {
+                console.warn(`[XHS-DL] 第${i+1}个笔记加载失败，跳过`);
+                window.history.back();
+                await sleep(2000);
+                continue;
+            }
+
+            await extractNote();
+
+            await extractComments();
+
+            state.autoExtractedNotes.push({
+                index: i + 1,
+                noteId: state.noteData?.noteId || noteId,
+                title: state.noteData?.title || title,
+                author: state.noteData?.author || '',
+                likes: state.noteData?.likes || likes,
+                collects: state.noteData?.collects || '0',
+                commentsCount: state.noteData?.commentsCount || '0',
+                desc: state.noteData?.desc || '',
+                tags: state.noteData?.tags || [],
+                images: state.noteData?.images || [],
+                video: state.noteData?.video || '',
+                comments: [...state.comments],
+                url: noteUrl,
+                extractedAt: new Date().toISOString()
+            });
+
+            window.history.back();
+
+            await sleep(2500);
+        }
+
+        state.isAutoExtracting = false;
+
+        if (btn) {
+            btn.classList.remove('loading');
+            btn.style.setProperty('--progress', '100%');
+        }
+
+        document.getElementById('xdl-auto-extract').style.display = 'block';
+        document.getElementById('xdl-stop-auto').style.display = 'none';
+
+        setStatus(`✅ 自动提取完成！共提取 ${state.autoExtractedNotes.length} 个笔记`);
+    }
+
+    // ========== 停止自动提取 ==========
+    function stopAutoExtract() {
+        state.isAutoExtracting = false;
+        setStatus(`⏹ 已停止提取，已提取 ${state.autoExtractedNotes.length} 个笔记`);
+        const btn = document.getElementById('xdl-auto-extract');
+        if (btn) {
+            btn.classList.remove('loading');
+            btn.style.setProperty('--progress', '0%');
+        }
+        document.getElementById('xdl-auto-extract').style.display = 'block';
+        document.getElementById('xdl-stop-auto').style.display = 'none';
+    }
+
     // ========== CSV 工具函数 ==========
     function csvEscape(val) {
         if (val == null) return '';
@@ -581,7 +716,7 @@
 
     // ========== 导出 CSV 表格 ==========
     function exportCSV() {
-        if (!state.noteData && state.comments.length === 0 && state.searchResults.length === 0) {
+        if (!state.noteData && state.comments.length === 0 && state.searchResults.length === 0 && state.autoExtractedNotes.length === 0) {
             setStatus('❌ 没有数据可导出，请先提取笔记内容、评论或搜索结果');
             return;
         }
@@ -636,12 +771,29 @@
             });
         }
 
+        // ---- 自动提取笔记列表 ----
+        if (state.autoExtractedNotes.length > 0) {
+            rows.push('');
+            rows.push(buildCSVRow(['=== 自动提取笔记列表 ===', '', '', '', '', '', '', '']));
+            rows.push(buildCSVRow(['序号', '笔记ID', '标题', '作者', '点赞', '收藏', '评论数', '链接']));
+            state.autoExtractedNotes.forEach((item) => {
+                rows.push(buildCSVRow([
+                    item.index, item.noteId, item.title, item.author, 
+                    item.likes, item.collects, item.commentsCount, item.url
+                ]));
+            });
+            rows.push('');
+            rows.push(buildCSVRow(['自动提取合计', state.autoExtractedNotes.length, '个笔记']));
+        }
+
         rows.push('');
         rows.push(buildCSVRow(['导出时间', new Date().toISOString()]));
 
         const fileName = note.noteId
             ? `xhs_${note.noteId}_${(note.title || '').substring(0, 20).replace(/[\\/:*?"<>|]/g, '_')}.csv`
-            : `xhs_search_export_${Date.now()}.csv`;
+            : state.autoExtractedNotes.length > 0
+                ? `xhs_auto_export_${Date.now()}.csv`
+                : `xhs_search_export_${Date.now()}.csv`;
 
         // BOM + CSV 内容（确保 Excel 正确识别 UTF-8）
         const BOM = '\uFEFF';
