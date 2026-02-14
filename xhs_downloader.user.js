@@ -6,6 +6,7 @@
 // @author       whc
 // @match        https://www.xiaohongshu.com/explore*
 // @match        https://www.xiaohongshu.com/search_result*
+// @match        https://www.xiaohongshu.com/user/profile/*
 // @icon         https://fe-video-qc.xhscdn.com/fe-platform/ed8fe781ce9e16c1bfac2cd962f0721edabe2e49.ico
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
@@ -138,6 +139,7 @@
     // 判断所在页面
     const isSearchPage = () => window.location.href.includes('/search_result');
     const isExplorePage = () => window.location.href.includes('/explore');
+    const isProfilePage = () => window.location.href.includes('/user/profile');
 
     // ========== UI 模块 ==========
     function createUI() {
@@ -216,8 +218,10 @@
           </div>
           <button class="xdl-btn success"   id="xdl-copy-links"><span>📋 复制素材链接</span></button>
         </div>
-        <div id="xdl-search-tools" style="${isSearchPage() ? '' : 'display:none'}">
-          <button class="xdl-btn primary"   id="xdl-extract-search">🔍 抓取搜索结果</button>
+        <div id="xdl-search-tools" style="${(isSearchPage() || isProfilePage()) ? '' : 'display:none'}">
+          <button class="xdl-btn primary"   id="xdl-extract-search">
+            ${isProfilePage() ? '👤 提取笔记列表' : '🔍 抓取搜索结果'}
+          </button>
         </div>
         <button class="xdl-btn success"   id="xdl-export-csv" style="margin-top:10px;">📊 导出 CSV 表格</button>
         <div id="xdl-status"></div>
@@ -228,7 +232,22 @@
 
         // 面板展开/收起
         document.getElementById('xhs-dl-toggle').onclick = () => {
-            document.getElementById('xhs-dl-menu').classList.toggle('show');
+            const menu = document.getElementById('xhs-dl-menu');
+            if (menu) {
+                // 打开菜单时根据当前页面更新工具显示
+                if (!menu.classList.contains('show')) {
+                    const detailTools = document.getElementById('xdl-detail-tools');
+                    const searchTools = document.getElementById('xdl-search-tools');
+                    const searchBtn = document.getElementById('xdl-extract-search');
+
+                    if (detailTools) detailTools.style.display = isExplorePage() ? 'block' : 'none';
+                    if (searchTools) searchTools.style.display = (isSearchPage() || isProfilePage()) ? 'block' : 'none';
+                    if (searchBtn) {
+                        searchBtn.innerHTML = isProfilePage() ? '👤 提取笔记列表' : '🔍 抓取搜索结果';
+                    }
+                }
+                menu.classList.toggle('show');
+            }
         };
 
         // 按钮绑定
@@ -261,7 +280,7 @@
         setStatus('⏳ 正在提取笔记内容...');
 
         // 提取笔记ID（从URL）
-        const urlMatch = window.location.href.match(/\/explore\/([a-f0-9]+)/);
+        const urlMatch = window.location.href.match(/\/(?:explore|profile\/[a-zA-Z0-9]+)\/([a-zA-Z0-9]+)/);
         const noteId = urlMatch ? urlMatch[1] : 'unknown';
 
         // 标题
@@ -504,12 +523,13 @@
 
     // ========== 搜索结果提取 ==========
     async function extractSearchResults() {
-        if (!isSearchPage()) {
-            setStatus('❌ 请在搜索结果页使用此功能');
+        if (!isSearchPage() && !isProfilePage()) {
+            setStatus('❌ 请在搜索结果页或用户主页使用此功能');
             return;
         }
 
-        setStatus('⏳ 正在提取搜索结果...');
+        const isProfile = isProfilePage();
+        setStatus(`⏳ 正在提取${isProfile ? '主页笔记' : '搜索结果'}...`);
         const cards = document.querySelectorAll('section.note-item');
         let count = 0;
         const seenIds = new Set(state.searchResults.map(r => r.id));
@@ -525,8 +545,15 @@
             const author = nameEl ? nameEl.innerText.trim() : '';
             const authorLink = authorEl ? authorEl.href : '';
             const likes = likeEl ? likeEl.innerText.trim() : '';
-            const url = linkEl ? linkEl.href : '';
-            const id = url.match(/\/explore\/([a-f0-9]+)/)?.[1] || url;
+            let id = '';
+            const exploreMatch = url.match(/\/explore\/([a-zA-Z0-9]+)/);
+            if (exploreMatch) {
+                id = exploreMatch[1];
+            } else {
+                // 处理用户主页链接格式: /user/profile/[user_id]/[note_id]
+                const parts = url.split('/');
+                id = parts[parts.length - 1].split('?')[0];
+            }
 
             if (id && !seenIds.has(id)) {
                 state.searchResults.push({ id, title, author, authorLink, likes, url });
@@ -639,7 +666,7 @@
         if (!container) return null;
 
         // 笔记ID
-        const urlMatch = window.location.href.match(/\/explore\/([a-f0-9]+)/);
+        const urlMatch = window.location.href.match(/\/(?:explore|profile\/[a-zA-Z0-9]+)\/([a-zA-Z0-9]+)/);
         const noteId = urlMatch ? urlMatch[1] : 'unknown';
 
         // 标题
