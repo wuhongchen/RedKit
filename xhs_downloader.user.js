@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小红书笔记内容&评论下载器
 // @namespace    https://github.com/wuhongchen/RedKit
-// @version      1.4.2
+// @version      1.4.3
 // @description  在小红书笔记详情页一键提取帖子内容、评论，导出 CSV 表格，支持逐个或链接复制素材下载。
 // @author       whc
 // @match        https://www.xiaohongshu.com/
@@ -381,9 +381,12 @@
 
         setStatus('⏳ 正在提取笔记内容...');
 
-        // 提取笔记ID（从URL）
+        // 提取笔记ID（优先从弹窗容器，其次从 URL）
+        let noteId = 'unknown';
+        const modalId = container.querySelector('[data-note-id]')?.getAttribute('data-note-id');
         const urlMatch = window.location.href.match(/\/(?:explore|profile\/[a-zA-Z0-9]+)\/([a-zA-Z0-9]+)/);
-        const noteId = urlMatch ? urlMatch[1] : 'unknown';
+
+        noteId = modalId || (urlMatch ? urlMatch[1] : 'unknown');
 
         // 标题
         const titleEl = document.querySelector('#detail-title');
@@ -643,21 +646,38 @@
         const isHome = isHomePage();
         setStatus(`⏳ 正在提取${isHome ? '首页' : isProfile ? '主页笔记' : '搜索结果'}...`);
 
-        // 首页和其他页面可能使用不同的卡片选择器
-        let cards = document.querySelectorAll('section.note-item');
+        // 兼容多种可能的卡片选择器（搜索页、首页、个人主页）
+        const cardSelectors = [
+            'section.note-item',
+            '.feeds-container > section',
+            '.note-card',
+            '.feed-item',
+            '[class*="note-item"]',
+            '.item'
+        ];
+
+        let cards = [];
+        for (const sel of cardSelectors) {
+            const found = document.querySelectorAll(sel);
+            if (found.length > 0) {
+                cards = found;
+                break;
+            }
+        }
+
         if (cards.length === 0) {
-            // 尝试其他可能的卡片选择器（首页）
-            cards = document.querySelectorAll('.note-card, .feed-item, [class*="note-item"], .item');
+            setStatus('❌ 未找到笔记卡片，请确认页面已加载');
+            return;
         }
         let count = 0;
         const seenIds = new Set(state.searchResults.map(r => r.id));
 
         cards.forEach(card => {
-            const titleEl = card.querySelector('.title');
-            const authorEl = card.querySelector('.author');
-            const nameEl = authorEl ? (authorEl.querySelector('.name') || authorEl.querySelector('div div')) : null;
-            const likeEl = card.querySelector('.count');
-            const linkEl = card.querySelector('a.cover');
+            const titleEl = card.querySelector('.title, .name, [class*="title"]');
+            const authorEl = card.querySelector('.author, .footer, [class*="author"]');
+            const nameEl = authorEl ? (authorEl.querySelector('.name') || authorEl.querySelector('div div') || authorEl.querySelector('span')) : null;
+            const likeEl = card.querySelector('.count, .like-count, [class*="count"]');
+            const linkEl = card.querySelector('a.cover, a[href*="/explore/"], a[href*="/user/profile/"]');
             const url = linkEl ? linkEl.href : '';
 
             const title = titleEl ? titleEl.innerText.trim() : '';
@@ -691,9 +711,27 @@
             return;
         }
 
-        const cards = document.querySelectorAll('section.note-item');
+        // 兼容多种可能的卡片选择器
+        const cardSelectors = [
+            'section.note-item',
+            '.feeds-container > section',
+            '.note-card',
+            '.feed-item',
+            '[class*="note-item"]',
+            '.item'
+        ];
+
+        let cards = [];
+        for (const sel of cardSelectors) {
+            const found = document.querySelectorAll(sel);
+            if (found.length > 0) {
+                cards = found;
+                break;
+            }
+        }
+
         if (cards.length === 0) {
-            setStatus('❌ 未找到笔记列表，请确保在首页、搜索结果页或用户主页');
+            setStatus('❌ 未找到笔记列表，请确保内容已由于页面加载');
             return;
         }
 
@@ -720,18 +758,24 @@
             state.autoExtractIndex = i;
             const card = cards[i];
 
-            const linkEl = card.querySelector('a.cover');
-            if (!linkEl) continue;
+            const linkEl = card.querySelector('a.cover, a[href*="/explore/"], a[href*="/user/profile/"]');
+            if (!linkEl) {
+                console.warn(`[XHS-DL] 第 ${i + 1} 个卡片未找到链接，尝试寻找 A 标签`);
+                continue;
+            }
 
             const noteUrl = linkEl.href;
-            const noteIdMatch = noteUrl.match(/\/explore\/([a-zA-Z0-9]+)/);
-            if (!noteIdMatch) continue;
+            const noteIdMatch = noteUrl.match(/\/(?:explore|profile\/[a-zA-Z0-9]+)\/([a-zA-Z0-9]+)/);
+            if (!noteIdMatch) {
+                // 如果正则没匹配到，尝试直接从 URL 末尾取
+                console.warn(`[XHS-DL] 无法识别笔记 ID: ${noteUrl}`);
+            }
 
-            const noteId = noteIdMatch[1];
+            const noteId = noteIdMatch ? noteIdMatch[1] : noteUrl.split('/').pop().split('?')[0];
 
-            const titleEl = card.querySelector('.title');
-            const likeEl = card.querySelector('.count');
-            const title = titleEl ? titleEl.innerText.trim() : '';
+            const titleEl = card.querySelector('.title, .name, [class*="title"]');
+            const likeEl = card.querySelector('.count, .like-count, [class*="count"]');
+            const title = titleEl ? titleEl.innerText.trim() : '无标题';
             const likes = likeEl ? likeEl.innerText.trim() : '0';
 
             const progress = Math.round(((i + 1) / cards.length) * 100);
@@ -739,23 +783,37 @@
 
             setStatus(`⏳ 正在提取第 ${i + 1}/${cards.length} 个: ${title.substring(0, 15)}...`);
 
-            linkEl.click();
+            // 优先点击卡片内部的图片或封面区域，避免直接触发 A 标签的 href 跳转导致全页刷新
+            const clickTarget = card.querySelector('.cover img, img, .cover, .item-img') || linkEl;
+            if (clickTarget) {
+                clickTarget.click();
+            } else {
+                linkEl.click();
+            }
 
             await sleep(3000);
 
+            // 增强检测：有些页面的详情容器可能是 .note-container 或 #noteContainer
             let waitCount = 0;
-            while (!document.querySelector('#noteContainer') && waitCount < 10) {
+            let containerFound = false;
+            while (waitCount < 20) {
+                if (document.querySelector('#noteContainer') || document.querySelector('.note-container')) {
+                    containerFound = true;
+                    break;
+                }
                 await sleep(500);
                 waitCount++;
             }
 
-            if (!document.querySelector('#noteContainer')) {
-                console.warn(`[XHS-DL] 第${i + 1}个笔记加载失败，跳过`);
-                window.history.back();
-                await sleep(2000);
-                continue;
+            if (!containerFound) {
+                console.warn(`[XHS-DL] 第${i + 1}个笔记加载失败，容器未找到。尝试直接提取或跳过`);
+                // 如果 URL 变了可能是跳转了，尝试等待
+                if (window.location.href.includes('/explore/')) {
+                    await sleep(2000);
+                } else {
+                    continue;
+                }
             }
-
             await extractNote();
 
             await extractComments();
